@@ -1,0 +1,17 @@
+# Entornos y caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Datos del usuario (BD, índices, checkpoints) — nunca al repo
+data/
+
+# Builds
+build/
+dist/
+*.spec
+
+# Secretos
+.env
