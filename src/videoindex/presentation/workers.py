@@ -35,8 +35,10 @@ class ServiciosCache:
 
 
 class EscaneoWorker(QThread):
-    """Escanea una carpeta (checksums pueden tardar) y reporta el resumen."""
+    """Escanea una carpeta (checksums pueden tardar en archivos grandes o en
+    red, p. ej. Google Drive sin caché local) y reporta el resumen."""
 
+    progreso = Signal(int, int, str)  # indice, total, nombre_archivo
     terminado = Signal(object)  # ResultadoIngesta
     fallo = Signal(str)
 
@@ -48,9 +50,13 @@ class EscaneoWorker(QThread):
     def run(self):
         try:
             from videoindex.application.ingest_service import IngestService
+            from videoindex.infrastructure.db.connection import conectar
 
-            servicios = ServiciosCache.obtener()
-            resultado = IngestService(servicios.con).escanear_carpeta(self.carpeta, self.curso)
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            resultado = IngestService(con).escanear_carpeta(
+                self.carpeta, self.curso, self.progreso.emit
+            )
+            con.close()
             self.terminado.emit(resultado)
         except Exception as exc:
             self.fallo.emit(str(exc))

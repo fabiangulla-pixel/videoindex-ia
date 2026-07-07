@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QTableWidget,
@@ -44,6 +45,14 @@ class LibraryView(QWidget):
         self.tabla.horizontalHeader().setStretchLastSection(True)
         self.tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(500)
+        self.log.setPlaceholderText(
+            "El registro de actividad (qué archivo se procesa, en qué etapa) aparece aquí…"
+        )
+        self.log.setFixedHeight(120)
+
         barra = QHBoxLayout()
         barra.addWidget(self.boton_agregar)
         barra.addWidget(self.etiqueta_estado, stretch=1)
@@ -52,10 +61,15 @@ class LibraryView(QWidget):
         layout.addLayout(barra)
         layout.addWidget(self.progreso)
         layout.addWidget(self.tabla, stretch=1)
+        layout.addWidget(QLabel("Registro de actividad:"))
+        layout.addWidget(self.log)
 
         self.boton_agregar.clicked.connect(self._agregar_carpeta)
         self._worker = None
         self.refrescar()
+
+    def _registrar(self, mensaje: str) -> None:
+        self.log.appendPlainText(mensaje)
 
     def refrescar(self):
         from videoindex.infrastructure.db.repositories import VideoRepo
@@ -83,17 +97,29 @@ class LibraryView(QWidget):
         if not carpeta:
             return
         self.etiqueta_estado.setText("Escaneando carpeta (checksums)…")
+        self._registrar(f"Escaneando: {carpeta}")
         self.boton_agregar.setEnabled(False)  # guardia anti-doble-clic
+        self.progreso.setVisible(True)
+        self.progreso.setRange(0, 0)  # indeterminada hasta saber el total de archivos
         self._worker = EscaneoWorker(carpeta)
+        self._worker.progreso.connect(self._on_progreso_escaneo)
         self._worker.terminado.connect(self._confirmar_lote)
         self._worker.fallo.connect(self._error)
         self._worker.start()
 
+    def _on_progreso_escaneo(self, indice: int, total: int, nombre: str):
+        self.progreso.setRange(0, total)
+        self.progreso.setValue(indice)
+        self.etiqueta_estado.setText(f"Calculando checksum {indice}/{total}…")
+        self._registrar(f"[{indice}/{total}] checksum: {nombre}")
+
     def _confirmar_lote(self, resultado):
         self.refrescar()
+        self.progreso.setVisible(False)
         por_procesar = resultado.por_procesar
         if not por_procesar:
             self.etiqueta_estado.setText("Nada nuevo que procesar.")
+            self._registrar("Escaneo terminado: nada nuevo que procesar.")
             self.boton_agregar.setEnabled(True)
             return
 
@@ -123,18 +149,22 @@ class LibraryView(QWidget):
         self._worker.fallo.connect(self._error)
         self._worker.start()
 
-    def _on_progreso(self, _video_id: str, etapa: str, fraccion: float):
+    def _on_progreso(self, video_id: str, etapa: str, fraccion: float):
         self.progreso.setValue(int(fraccion * 100))
-        self.etiqueta_estado.setText(_ETIQUETAS_ESTADO.get(etapa, etapa))
+        etiqueta = _ETIQUETAS_ESTADO.get(etapa, etapa)
+        self.etiqueta_estado.setText(etiqueta)
+        self._registrar(f"[{video_id[:8]}] {etiqueta}")
         self.refrescar()
 
     def _on_terminado(self, ok: int, fail: int):
         self.progreso.setVisible(False)
         self.etiqueta_estado.setText(f"Lote terminado: {ok} completados, {fail} fallidos.")
+        self._registrar(f"Lote terminado: {ok} completados, {fail} fallidos.")
         self.boton_agregar.setEnabled(True)
         self.refrescar()
 
     def _error(self, mensaje: str):
         self.progreso.setVisible(False)
         self.boton_agregar.setEnabled(True)
+        self._registrar(f"ERROR: {mensaje}")
         QMessageBox.critical(self, "Error", mensaje)

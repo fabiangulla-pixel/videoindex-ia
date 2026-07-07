@@ -7,9 +7,15 @@ fuera del repo (gitignored) y siempre en disco local.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if getattr(sys, "frozen", False):
+    # .exe de PyInstaller: los .py viven empaquetados, no en src/videoindex/.
+    # Los datos van junto al ejecutable.
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Permite redirigir los datos (p. ej. en tests) sin tocar código.
 DATA_DIR = Path(os.environ.get("VIDEOINDEX_DATA", PROJECT_ROOT / "data"))

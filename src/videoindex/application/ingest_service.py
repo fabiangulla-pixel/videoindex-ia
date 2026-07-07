@@ -9,6 +9,7 @@ Idempotencia (SAD §3.4): el checksum sha256 es la identidad del video.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -39,15 +40,23 @@ class IngestService:
         self.videos = VideoRepo(con)
 
     def escanear_carpeta(
-        self, carpeta: str | Path, course_name: str | None = None
+        self,
+        carpeta: str | Path,
+        course_name: str | None = None,
+        progreso: Callable[[int, int, str], None] | None = None,
     ) -> ResultadoIngesta:
+        """progreso(indice_1based, total, nombre_archivo) — para mostrar avance
+        durante el cálculo de checksum, que puede tardar en archivos grandes
+        o en red (p. ej. Google Drive sin caché local)."""
         carpeta = Path(carpeta)
         if not carpeta.is_dir():
             raise NotADirectoryError(f"No es una carpeta: {carpeta}")
 
         resultado = ResultadoIngesta()
         archivos = sorted(p for p in carpeta.rglob("*") if p.is_file() and es_video(p))
-        for archivo in archivos:
+        for i, archivo in enumerate(archivos, 1):
+            if progreso:
+                progreso(i, len(archivos), archivo.name)
             checksum = checksum_sha256(archivo)
             existente = self.videos.por_checksum(checksum)
             if existente:

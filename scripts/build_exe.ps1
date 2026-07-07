@@ -11,6 +11,7 @@ $spacyModel = .\.venv\Scripts\python.exe -c "import es_core_news_md, pathlib; pr
 .\.venv\Scripts\pyinstaller.exe --clean --noconfirm --windowed --name VideoIndexIA `
     --paths src `
     --add-data "$spacyModel;es_core_news_md" `
+    --add-data "src\videoindex\infrastructure\db\schema.sql;videoindex\infrastructure\db" `
     --collect-all faster_whisper `
     --collect-all ctranslate2 `
     --collect-all faiss `
