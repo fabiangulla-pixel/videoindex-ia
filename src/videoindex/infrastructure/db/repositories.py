@@ -30,8 +30,8 @@ class VideoRepo:
     def guardar(self, v: Video) -> None:
         self.con.execute(
             """INSERT INTO videos (video_id, title, path, checksum, duration_seconds,
-                                   course_name, session_name, processing_status)
-               VALUES (?,?,?,?,?,?,?,?)
+                                   course_name, session_name, processing_status, content_start_s)
+               VALUES (?,?,?,?,?,?,?,?,?)
                ON CONFLICT(checksum) DO UPDATE SET path=excluded.path, title=excluded.title""",
             (
                 v.video_id,
@@ -42,6 +42,7 @@ class VideoRepo:
                 v.course_name,
                 v.session_name,
                 v.processing_status,
+                v.content_start_s,
             ),
         )
         self.con.commit()
@@ -50,6 +51,13 @@ class VideoRepo:
         self.con.execute(
             "UPDATE videos SET processing_status = ?, error_message = ? WHERE video_id = ?",
             (estado, error, video_id),
+        )
+        self.con.commit()
+
+    def actualizar_content_start(self, video_id: str, offset_s: float) -> None:
+        self.con.execute(
+            "UPDATE videos SET content_start_s = ? WHERE video_id = ?",
+            (offset_s, video_id),
         )
         self.con.commit()
 
@@ -68,6 +76,7 @@ class VideoRepo:
             course_name=row["course_name"],
             session_name=row["session_name"],
             processing_status=row["processing_status"],
+            content_start_s=row["content_start_s"],
         )
 
 

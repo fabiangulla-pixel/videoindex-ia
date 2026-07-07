@@ -35,6 +35,7 @@ from videoindex.infrastructure.db.repositories import (
     SegmentRepo,
     VideoRepo,
 )
+from videoindex.infrastructure.media.probe import detectar_inicio_contenido
 from videoindex.infrastructure.vector.faiss_index import FaissIndex
 
 log = logging.getLogger(__name__)
@@ -99,6 +100,10 @@ class PipelineService:
                 progress(video.video_id, etapa, fraccion)
 
         self._limpiar_derivados(video.video_id)
+
+        avisar("detecting_offset")
+        offset = detectar_inicio_contenido(video.path)
+        self.videos.actualizar_content_start(video.video_id, offset)
 
         avisar("transcribing")
         self.videos.actualizar_estado(video.video_id, "transcribing")

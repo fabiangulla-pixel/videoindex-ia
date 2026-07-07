@@ -24,11 +24,20 @@ CREATE INDEX IF NOT EXISTS idx_annotations_video
     ON video_annotations(video_id, timestamp_s);
 """
 
+# Offset (s) de "inicio real de contenido" detectado por análisis de
+# luminancia de video (independiente del VAD de audio). Puramente
+# informativo para la UI de reproducción — NO recorta ni desplaza los
+# timestamps ya persistidos en transcript_segments/semantic_chunks.
+_V3_CONTENT_START = """
+ALTER TABLE videos ADD COLUMN content_start_s REAL;
+"""
+
 # Cada entrada: (versión, SQL). La v1 es el schema.sql completo; futuras
 # migraciones se agregan aquí como ALTER/CREATE incrementales.
 _MIGRACIONES: list[tuple[int, str]] = [
     (1, _SCHEMA_SQL.read_text(encoding="utf-8")),
     (2, _V2_ANOTACIONES),
+    (3, _V3_CONTENT_START),
 ]
 
 

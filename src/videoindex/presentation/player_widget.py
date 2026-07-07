@@ -67,6 +67,13 @@ class PlayerWidget(QWidget):
         self.boton_anotar = QPushButton("📝 Anotar aquí")
         self.boton_anotar.setEnabled(False)  # sin video abierto, no hay dónde anotar
         self.boton_anotar.clicked.connect(self._anotar_en_posicion_actual)
+
+        # Salta el negro/silencio inicial detectado en el pipeline (nunca
+        # modifica el archivo; solo mueve el punto de reproducción).
+        self.boton_saltar_contenido = QPushButton("⏭ Saltar al inicio del contenido")
+        self.boton_saltar_contenido.setEnabled(False)
+        self.boton_saltar_contenido.clicked.connect(self._saltar_al_inicio_contenido)
+
         self.lista_notas = QListWidget()
         self.lista_notas.setMaximumHeight(120)
         self.lista_notas.itemDoubleClicked.connect(self._saltar_a_nota)
@@ -77,6 +84,7 @@ class PlayerWidget(QWidget):
         layout.addWidget(self.titulo)
         layout.addWidget(self.video, stretch=1)
         layout.addLayout(controles)
+        layout.addWidget(self.boton_saltar_contenido)
         layout.addWidget(self.boton_anotar)
         layout.addWidget(QLabel("Notas (doble clic para saltar, clic derecho para editar/borrar):"))
         layout.addWidget(self.lista_notas)
@@ -88,6 +96,7 @@ class PlayerWidget(QWidget):
 
         self._ruta_actual: str | None = None
         self._video_id_actual: str | None = None
+        self._content_start_actual: float | None = None
 
     def abrir_en(
         self, ruta: str, titulo: str, start_time_s: float, video_id: str | None = None
@@ -110,6 +119,7 @@ class PlayerWidget(QWidget):
         self._video_id_actual = video_id
         self.boton_anotar.setEnabled(video_id is not None)
         self._cargar_notas()
+        self._cargar_content_start()
 
     def _cargar_notas(self) -> None:
         self.lista_notas.clear()
@@ -128,6 +138,31 @@ class PlayerWidget(QWidget):
             item = QListWidgetItem(f"{_fmt_s(nota.timestamp_s)} — {nota.text}")
             item.setData(Qt.ItemDataRole.UserRole, nota)
             self.lista_notas.addItem(item)
+
+    def _cargar_content_start(self) -> None:
+        self._content_start_actual = None
+        self.boton_saltar_contenido.setEnabled(False)
+        if not self._video_id_actual:
+            return
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
+        from videoindex.infrastructure.db.repositories import VideoRepo
+
+        con = conectar(paths.DB_PATH)
+        try:
+            video = VideoRepo(con).por_id(self._video_id_actual)
+        finally:
+            con.close()
+        # None (aún no detectado) y 0.0 (no se detectó negro) quedan
+        # deshabilitados por igual: no hay a dónde saltar en ambos casos.
+        if video and video.content_start_s:
+            self._content_start_actual = video.content_start_s
+            self.boton_saltar_contenido.setEnabled(True)
+
+    def _saltar_al_inicio_contenido(self) -> None:
+        if self._content_start_actual is None:
+            return
+        self.player.setPosition(int(self._content_start_actual * 1000))
 
     def _anotar_en_posicion_actual(self) -> None:
         if not self._video_id_actual:

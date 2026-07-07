@@ -15,6 +15,13 @@ class TranscriptionSettings:
     # Factor inicial: horas de proceso por hora de video con `small` en CPU.
     # Se recalibra con el tiempo real medido tras el primer video.
     factor_tiempo_inicial: float = 0.5
+    # Defaults = los mismos de faster-whisper: actualizar el proyecto no
+    # cambia el comportamiento de nadie que no los ajuste explícitamente.
+    beam_size: int = 5  # bajar a 1-2 gana velocidad, pierde algo de precisión
+    initial_prompt: str = ""  # vocabulario/contexto técnico opcional
+    # False evita "loops" de alucinación en grabaciones largas, a costa de
+    # perder coherencia de contexto entre segmentos.
+    condition_on_previous_text: bool = True
 
 
 @dataclass

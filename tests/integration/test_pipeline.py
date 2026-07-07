@@ -99,6 +99,21 @@ def test_reanudacion_salta_completados(con, tmp_path, fake_embedder, settings):
     assert len(transcriptor.llamadas) == llamadas_1  # no re-transcribe
 
 
+def test_content_start_se_persiste_durante_el_pipeline(
+    con, tmp_path, fake_embedder, settings, monkeypatch
+):
+    v = _alta_video(con, "C:/v/a.mp4", "ck-a")
+    transcriptor = FakeTranscriptionProvider(_segmentos_demo("C:/v/a.mp4"))
+    pipeline, _ = _pipeline(con, tmp_path, fake_embedder, transcriptor, settings)
+
+    monkeypatch.setattr(
+        "videoindex.application.pipeline_service.detectar_inicio_contenido",
+        lambda ruta: 3.5,
+    )
+    pipeline.procesar_lote([v])
+    assert VideoRepo(con).por_id(v.video_id).content_start_s == 3.5
+
+
 def test_fallo_no_aborta_lote(con, tmp_path, fake_embedder, settings):
     v_mal = _alta_video(con, "C:/v/mal.mp4", "ck-mal")
     v_bien = _alta_video(con, "C:/v/bien.mp4", "ck-bien")

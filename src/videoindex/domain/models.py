@@ -19,6 +19,12 @@ class Video:
     course_name: str | None = None
     session_name: str | None = None
     processing_status: str = "pending"
+    # Instante (s) detectado como inicio real del contenido (después del
+    # negro/silencio inicial de la grabación). Puramente informativo para
+    # la UI de reproducción: NUNCA se resta de los timestamps de
+    # transcript_segments/semantic_chunks, que siguen absolutos (ADR-002).
+    # None = aún no detectado (video previo a esta feature, o pendiente).
+    content_start_s: float | None = None
 
 
 @dataclass

@@ -81,6 +81,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         SETTINGS.transcription.modelo,
         SETTINGS.transcription.idioma,
         SETTINGS.transcription.compute_type,
+        SETTINGS.transcription.beam_size,
+        SETTINGS.transcription.initial_prompt,
+        SETTINGS.transcription.condition_on_previous_text,
     )
     pipeline = PipelineService(con, transcriptor, embedder, ner, faiss_index, SETTINGS)
 

@@ -10,6 +10,8 @@ dependencies = [
     "spacy",
     "PySide6",
     "keyring",
+    "av",
+    "numpy",
 ]
 
 [project.optional-dependencies]

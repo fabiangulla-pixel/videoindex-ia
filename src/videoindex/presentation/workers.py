@@ -110,6 +110,9 @@ class PipelineWorker(QThread):
                 SETTINGS.transcription.modelo,
                 SETTINGS.transcription.idioma,
                 SETTINGS.transcription.compute_type,
+                SETTINGS.transcription.beam_size,
+                SETTINGS.transcription.initial_prompt,
+                SETTINGS.transcription.condition_on_previous_text,
             )
             pipeline = PipelineService(
                 con, transcriptor, servicios.embedder, servicios.ner, servicios.faiss, SETTINGS

@@ -25,14 +25,32 @@ def _modelo(nombre: str, compute_type: str):
 
 
 class FasterWhisperProvider:
-    def __init__(self, modelo: str = "small", idioma: str = "es", compute_type: str = "int8"):
+    def __init__(
+        self,
+        modelo: str = "small",
+        idioma: str = "es",
+        compute_type: str = "int8",
+        beam_size: int = 5,
+        initial_prompt: str = "",
+        condition_on_previous_text: bool = True,
+    ):
         self.nombre_modelo = modelo
         self.idioma = idioma
         self.compute_type = compute_type
+        self.beam_size = beam_size
+        self.initial_prompt = initial_prompt
+        self.condition_on_previous_text = condition_on_previous_text
 
     def transcribir(self, ruta_video: str, video_id: str) -> list[TranscriptSegment]:
         model = _modelo(self.nombre_modelo, self.compute_type)
-        segments, _info = model.transcribe(ruta_video, language=self.idioma, vad_filter=True)
+        segments, _info = model.transcribe(
+            ruta_video,
+            language=self.idioma,
+            vad_filter=True,
+            beam_size=self.beam_size,
+            initial_prompt=self.initial_prompt or None,
+            condition_on_previous_text=self.condition_on_previous_text,
+        )
         resultado: list[TranscriptSegment] = []
         for seg in segments:
             texto = seg.text.strip()

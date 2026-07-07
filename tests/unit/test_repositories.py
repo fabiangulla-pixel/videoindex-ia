@@ -43,6 +43,15 @@ def test_estado_y_error(con):
     assert repo.por_id(v.video_id).processing_status == "failed"
 
 
+def test_content_start_se_guarda_y_lee(con):
+    repo = VideoRepo(con)
+    v = _video()
+    repo.guardar(v)
+    assert repo.por_id(v.video_id).content_start_s is None  # aún no detectado
+    repo.actualizar_content_start(v.video_id, 4.5)
+    assert repo.por_id(v.video_id).content_start_s == 4.5
+
+
 def test_fts_encuentra_sin_tildes(con):
     vrepo, crepo = VideoRepo(con), ChunkRepo(con)
     v = _video()

@@ -43,3 +43,26 @@ def test_whisper_decodifica_y_da_timestamps_absolutos(tmp_path):
         assert 0.0 <= s.start_time <= s.end_time <= 7.0
         assert s.video_id == "video-test"
         assert 0.0 <= s.confidence <= 1.0
+
+
+def test_whisper_acepta_parametros_de_velocidad_y_calidad(tmp_path):
+    """faster-whisper real debe aceptar beam_size/initial_prompt/
+    condition_on_previous_text sin error de la librería (contrato con el
+    SDK, no solo con el wrapper)."""
+    from videoindex.infrastructure.transcription.faster_whisper_provider import (
+        FasterWhisperProvider,
+    )
+
+    ruta = tmp_path / "tono2.wav"
+    _wav_sintetico(ruta)
+    provider = FasterWhisperProvider(
+        modelo="tiny",
+        idioma="es",
+        compute_type="int8",
+        beam_size=1,
+        initial_prompt="clase de tecnología",
+        condition_on_previous_text=False,
+    )
+    segmentos = provider.transcribir(str(ruta), "video-test-2")
+    for s in segmentos:
+        assert 0.0 <= s.start_time <= s.end_time <= 7.0
