@@ -145,3 +145,81 @@ def test_embedding_version_unica_activa(con):
     v1_bis = repo.version_activa("modelo-a", 384, "a.faiss")
     assert v1 == v1_bis  # no crea duplicados
     assert repo.siguiente_faiss_id(v1) == 0
+
+
+def test_chunk_repo_por_video_ordena_por_start_time(con):
+    vrepo, crepo = VideoRepo(con), ChunkRepo(con)
+    v = _video()
+    vrepo.guardar(v)
+    crepo.guardar_lote(
+        [
+            SemanticChunk(
+                chunk_id=str(uuid4()),
+                video_id=v.video_id,
+                start_time=30.0,
+                end_time=40.0,
+                full_text="segundo tema",
+            ),
+            SemanticChunk(
+                chunk_id=str(uuid4()),
+                video_id=v.video_id,
+                start_time=0.0,
+                end_time=10.0,
+                full_text="primer tema",
+            ),
+        ]
+    )
+    chunks = crepo.por_video(v.video_id)
+    assert [c.full_text for c in chunks] == ["primer tema", "segundo tema"]
+    assert chunks[0].start_time == 0.0  # absolutos, orden temporal
+
+
+def test_entidades_de_video_agrupa_chunks_ordenados_por_tiempo(con):
+    vrepo, crepo, erepo = VideoRepo(con), ChunkRepo(con), EntityRepo(con)
+    v = _video()
+    vrepo.guardar(v)
+    c1 = SemanticChunk(
+        chunk_id=str(uuid4()),
+        video_id=v.video_id,
+        start_time=0.0,
+        end_time=10.0,
+        full_text="Petro habla primero",
+    )
+    c2 = SemanticChunk(
+        chunk_id=str(uuid4()),
+        video_id=v.video_id,
+        start_time=20.0,
+        end_time=30.0,
+        full_text="Petro habla despues",
+    )
+    c3 = SemanticChunk(
+        chunk_id=str(uuid4()),
+        video_id=v.video_id,
+        start_time=5.0,
+        end_time=15.0,
+        full_text="Bogota se menciona aqui",
+    )
+    crepo.guardar_lote([c1, c2, c3])
+
+    petro = erepo.upsert("Petro", "persona")
+    bogota = erepo.upsert("Bogotá", "lugar")
+    erepo.registrar_mencion(petro.entity_id, c1.chunk_id, v.video_id, "Petro")
+    erepo.registrar_mencion(petro.entity_id, c2.chunk_id, v.video_id, "Petro")
+    erepo.registrar_mencion(bogota.entity_id, c3.chunk_id, v.video_id, "Bogotá")
+
+    entidades, chunks_por_entidad = erepo.catalogo_de_video(v.video_id)
+
+    assert set(entidades) == {petro.entity_id, bogota.entity_id}
+    assert entidades[petro.entity_id].label == "Petro"
+    # orden cronológico dentro de la misma entidad (c1 antes que c2)
+    assert chunks_por_entidad[petro.entity_id] == [c1.chunk_id, c2.chunk_id]
+    assert chunks_por_entidad[bogota.entity_id] == [c3.chunk_id]
+
+
+def test_entidades_de_video_sin_menciones_devuelve_vacio(con):
+    vrepo, erepo = VideoRepo(con), EntityRepo(con)
+    v = _video()
+    vrepo.guardar(v)
+    entidades, chunks_por_entidad = erepo.catalogo_de_video(v.video_id)
+    assert entidades == {}
+    assert chunks_por_entidad == {}

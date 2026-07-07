@@ -213,6 +213,28 @@ class ChunkRepo:
         self.con.commit()
         return ids
 
+    def por_video(self, video_id: str) -> list[SemanticChunk]:
+        """TODOS los chunks del video (no top-k), para el Dossier — cobertura
+        completa, no búsqueda. segment_ids queda vacío: no se re-persiste."""
+        rows = self.con.execute(
+            "SELECT * FROM semantic_chunks WHERE video_id = ? ORDER BY start_time",
+            (video_id,),
+        ).fetchall()
+        return [self._a_modelo(r) for r in rows]
+
+    @staticmethod
+    def _a_modelo(row: sqlite3.Row) -> SemanticChunk:
+        return SemanticChunk(
+            chunk_id=row["chunk_id"],
+            video_id=row["video_id"],
+            start_time=row["start_time"],
+            end_time=row["end_time"],
+            full_text=row["full_text"],
+            summary=row["summary"] or "",
+            discourse_type=row["discourse_type"],
+            avg_confidence=row["avg_confidence"],
+        )
+
 
 class EntityRepo:
     def __init__(self, con: sqlite3.Connection):
@@ -255,6 +277,28 @@ class EntityRepo:
         for r in rows:
             resultado.setdefault(r["chunk_id"], set()).add(r["label_norm"])
         return resultado
+
+    def catalogo_de_video(self, video_id: str) -> tuple[dict[str, Entity], dict[str, list[str]]]:
+        """(entity_id -> Entity, entity_id -> chunk_ids en orden temporal) —
+        para el Dossier: TODAS las entidades del video con TODOS sus chunks,
+        una sola query (evita N+1)."""
+        rows = self.con.execute(
+            """SELECT e.entity_id, e.label, e.label_norm, e.entity_type, m.chunk_id
+               FROM entity_mentions m
+               JOIN entities e USING (entity_id)
+               JOIN semantic_chunks c USING (chunk_id)
+               WHERE m.video_id = ?
+               ORDER BY e.label_norm, c.start_time""",
+            (video_id,),
+        ).fetchall()
+        entidades: dict[str, Entity] = {}
+        chunks_por_entidad: dict[str, list[str]] = {}
+        for r in rows:
+            eid = r["entity_id"]
+            if eid not in entidades:
+                entidades[eid] = Entity(eid, r["label"], r["label_norm"], r["entity_type"])
+            chunks_por_entidad.setdefault(eid, []).append(r["chunk_id"])
+        return entidades, chunks_por_entidad
 
     def registrar_coocurrencia(self, entity_a: str, entity_b: str) -> None:
         """KG simple del MVP: UPSERT weight+1 sobre el par ordenado."""

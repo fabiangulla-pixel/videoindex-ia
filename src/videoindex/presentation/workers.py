@@ -151,3 +151,68 @@ class BusquedaWorker(QThread):
         finally:
             if con is not None:
                 con.close()
+
+
+class DossierRecopilarWorker(QThread):
+    """Fase 1 del Dossier: recopila TODAS las entidades del video y sus
+    chunks como evidencia (no necesita embedder/NER/FAISS, no usa
+    ServiciosCache — solo SQL)."""
+
+    listo = Signal(str, list)  # video_title, list[tuple[Entity, list[Evidence]]]
+    fallo = Signal(str)
+
+    def __init__(self, video_id: str, video_title: str):
+        super().__init__()
+        self.video_id = video_id
+        self.video_title = video_title
+
+    def run(self):
+        con = None
+        try:
+            from videoindex.application.dossier_service import DossierService
+            from videoindex.infrastructure.db.connection import conectar
+
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            servicio = DossierService(con, SETTINGS.rag)
+            entidades_evidencia = servicio.recopilar_evidencia_por_entidad(
+                self.video_id, self.video_title
+            )
+            self.listo.emit(self.video_title, entidades_evidencia)
+        except Exception as exc:
+            self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
+
+
+class DossierGenerarWorker(QThread):
+    """Fase 2 del Dossier: una llamada al LLM por entidad con evidencia,
+    misma instancia de provider para las N llamadas (usages() acumula)."""
+
+    listo = Signal(str, list, object)  # video_title, list[DossierEntidad], CostoReal
+    fallo = Signal(str)
+
+    def __init__(self, video_title: str, entidades_evidencia: list, proveedor: str, modelo: str):
+        super().__init__()
+        self.video_title = video_title
+        self.entidades_evidencia = entidades_evidencia
+        self.proveedor = proveedor
+        self.modelo = modelo
+
+    def run(self):
+        con = None
+        try:
+            from videoindex.application.dossier_service import DossierService
+            from videoindex.infrastructure.db.connection import conectar
+            from videoindex.infrastructure.llm.providers import crear_provider
+
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            servicio = DossierService(con, SETTINGS.rag)
+            llm = crear_provider(self.proveedor, self.modelo)
+            dossier, costo_real = servicio.generar(self.entidades_evidencia, llm, self.proveedor)
+            self.listo.emit(self.video_title, dossier, costo_real)
+        except Exception as exc:
+            self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()

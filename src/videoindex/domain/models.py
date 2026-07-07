@@ -125,3 +125,16 @@ class RAGAnswer:
     def anclada(self) -> bool:
         """True si la respuesta cita al menos una evidencia."""
         return bool(self.cited_indices)
+
+
+@dataclass
+class DossierEntidad:
+    """Resumen narrativo de TODO lo dicho sobre una entidad en un video
+    (cobertura completa, no un top-k de búsqueda). Reutiliza RAGAnswer sin
+    modificarlo: mismo contrato de evidencia y citas [n] que el RAG puntual."""
+
+    entity_id: str
+    entity_label: str
+    entity_type: str
+    answer: RAGAnswer
+    chunks_cubiertos: int

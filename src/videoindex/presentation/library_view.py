@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -19,7 +20,13 @@ from PySide6.QtWidgets import (
 
 from videoindex.application.time_estimator import TimeEstimator
 from videoindex.config.settings import SETTINGS
-from videoindex.presentation.workers import EscaneoWorker, PipelineWorker
+from videoindex.presentation.dossier_view import DossierConfirmDialog, DossierResultDialog
+from videoindex.presentation.workers import (
+    DossierGenerarWorker,
+    DossierRecopilarWorker,
+    EscaneoWorker,
+    PipelineWorker,
+)
 
 _ETIQUETAS_ESTADO = {
     "pending": "⏳ pendiente",
@@ -48,6 +55,8 @@ class LibraryView(QWidget):
         self.tabla.horizontalHeader().setStretchLastSection(True)
         self.tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabla.itemDoubleClicked.connect(self._abrir_seleccionado)
+        self.tabla.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tabla.customContextMenuRequested.connect(self._menu_contextual)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -70,6 +79,7 @@ class LibraryView(QWidget):
 
         self.boton_agregar.clicked.connect(self._agregar_carpeta)
         self._worker = None
+        self._worker_dossier = None  # flujo independiente de la ingesta
         self.refrescar()
 
     def _registrar(self, mensaje: str) -> None:
@@ -111,6 +121,81 @@ class LibraryView(QWidget):
             return
         video_id, ruta = item_titulo.data(Qt.ItemDataRole.UserRole)
         self.abrir_video.emit(ruta, item_titulo.text(), 0.0, video_id)
+
+    def _menu_contextual(self, pos) -> None:
+        item = self.tabla.itemAt(pos)
+        if item is None:
+            return
+        fila = item.row()
+        item_titulo = self.tabla.item(fila, 0)
+        estado_item = self.tabla.item(fila, 3)
+        if item_titulo is None or estado_item is None:
+            return
+        video_id, _ruta = item_titulo.data(Qt.ItemDataRole.UserRole)
+
+        menu = QMenu(self)
+        accion = menu.addAction("📄 Generar dossier del video…")
+        # Sin chunks (video no completado) no hay nada que agrupar por entidad.
+        accion.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
+        elegida = menu.exec(self.tabla.viewport().mapToGlobal(pos))
+        if elegida == accion:
+            self._iniciar_dossier(video_id, item_titulo.text())
+
+    def _iniciar_dossier(self, video_id: str, titulo: str) -> None:
+        if self._worker_dossier is not None and self._worker_dossier.isRunning():
+            return  # guardia anti-doble-disparo
+        self._worker_dossier = DossierRecopilarWorker(video_id, titulo)
+        self._worker_dossier.listo.connect(self._confirmar_costo_dossier)
+        self._worker_dossier.fallo.connect(self._error)
+        self._worker_dossier.start()
+
+    def _confirmar_costo_dossier(self, titulo: str, entidades_evidencia: list) -> None:
+        if not entidades_evidencia:
+            QMessageBox.information(
+                self, "Dossier", "No se detectaron entidades en este video: nada que agrupar."
+            )
+            return
+
+        dialogo = DossierConfirmDialog(len(entidades_evidencia), self)
+        if dialogo.exec() != DossierConfirmDialog.DialogCode.Accepted:
+            return
+        proveedor, modelo = dialogo.proveedor_modelo()
+
+        from videoindex.application.dossier_service import DossierService
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
+
+        con = conectar(paths.DB_PATH)
+        try:
+            servicio = DossierService(con, SETTINGS.rag)
+            estimacion = servicio.estimar_dossier(entidades_evidencia, proveedor, modelo)
+        except Exception as exc:
+            con.close()
+            self._error(str(exc))
+            return
+        con.close()
+
+        if not estimacion.es_local and (
+            QMessageBox.question(
+                self,
+                "Confirmar gasto de IA",
+                estimacion.resumen(),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        self._worker_dossier = DossierGenerarWorker(titulo, entidades_evidencia, proveedor, modelo)
+        self._worker_dossier.listo.connect(self._mostrar_dossier)
+        self._worker_dossier.fallo.connect(self._error)
+        self._worker_dossier.start()
+
+    def _mostrar_dossier(self, titulo: str, dossier: list, costo_real) -> None:
+        from videoindex.application.dossier_service import DossierService
+
+        markdown = DossierService.exportar_markdown(titulo, dossier)
+        DossierResultDialog(titulo, markdown, costo_real.resumen(), self).exec()
 
     def _agregar_carpeta(self):
         if self._worker is not None and self._worker.isRunning():
