@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -33,6 +33,9 @@ _ETIQUETAS_ESTADO = {
 
 
 class LibraryView(QWidget):
+    # path, título, timestamp inicial (0 = desde el principio), video_id
+    abrir_video = Signal(str, str, float, str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.boton_agregar = QPushButton("📂 Agregar carpeta…")
@@ -44,6 +47,7 @@ class LibraryView(QWidget):
         self.tabla.setHorizontalHeaderLabels(["Título", "Curso", "Duración", "Estado"])
         self.tabla.horizontalHeader().setStretchLastSection(True)
         self.tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabla.itemDoubleClicked.connect(self._abrir_seleccionado)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -94,8 +98,19 @@ class LibraryView(QWidget):
             ):
                 item = QTableWidgetItem(texto)
                 if col == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, v.video_id)
+                    item.setData(Qt.ItemDataRole.UserRole, (v.video_id, v.path))
                 self.tabla.setItem(fila, col, item)
+
+    def _abrir_seleccionado(self, item: QTableWidgetItem) -> None:
+        """Reproducir cualquier video de la biblioteca, esté o no procesado
+        (pedido explícito: no limitar la reproducción a resultados de
+        búsqueda)."""
+        fila = item.row()
+        item_titulo = self.tabla.item(fila, 0)
+        if item_titulo is None:
+            return
+        video_id, ruta = item_titulo.data(Qt.ItemDataRole.UserRole)
+        self.abrir_video.emit(ruta, item_titulo.text(), 0.0, video_id)
 
     def _agregar_carpeta(self):
         if self._worker is not None and self._worker.isRunning():

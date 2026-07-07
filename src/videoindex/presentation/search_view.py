@@ -27,7 +27,7 @@ def _fmt(segundos: float) -> str:
 
 
 class SearchView(QWidget):
-    abrir_video = Signal(str, str, float)  # path, titulo, start_time
+    abrir_video = Signal(str, str, float, str)  # path, titulo, start_time, video_id
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -90,7 +90,7 @@ class SearchView(QWidget):
 
     def _abrir(self, item: QListWidgetItem):
         r: SearchResult = item.data(Qt.ItemDataRole.UserRole)
-        self.abrir_video.emit(r.video_path, r.video_title, r.start_time)
+        self.abrir_video.emit(r.video_path, r.video_title, r.start_time, r.video_id)
 
     def _error(self, mensaje: str):
         self.boton.setEnabled(True)

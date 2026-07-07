@@ -38,6 +38,22 @@ class SearchSettings:
     rrf_k: int = 60
 
 
+# Catálogo de modelos por proveedor: la app recomienda el primero (default),
+# pero el combo de la GUI es editable — el usuario puede escribir cualquier
+# otro modelo vigente sin esperar una recompilación.
+MODELOS_POR_PROVEEDOR: dict[str, list[str]] = {
+    "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+    "openai": ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-4.1-mini"],
+    "claude": ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
+    "ollama": ["llama3.1", "qwen2.5", "mistral"],
+}
+
+
+def modelo_recomendado(proveedor: str) -> str:
+    modelos = MODELOS_POR_PROVEEDOR.get(proveedor, [])
+    return modelos[0] if modelos else ""
+
+
 @dataclass
 class RAGSettings:
     proveedor: str = "gemini"
@@ -55,3 +71,40 @@ class Settings:
 
 
 SETTINGS = Settings()
+
+
+def _archivo_preferencias():
+    from videoindex.config import paths
+
+    return paths.DATA_DIR / "preferencias.json"
+
+
+def cargar_preferencias_rag() -> None:
+    """Restaura proveedor/modelo elegidos en una sesión anterior (no es
+    secreto, así que va en un JSON simple, no en el keyring)."""
+    import json
+
+    ruta = _archivo_preferencias()
+    if not ruta.exists():
+        return
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if datos.get("proveedor"):
+        SETTINGS.rag.proveedor = datos["proveedor"]
+    if datos.get("modelo"):
+        SETTINGS.rag.modelo = datos["modelo"]
+
+
+def guardar_preferencias_rag(proveedor: str, modelo: str) -> None:
+    import json
+
+    from videoindex.config import paths
+
+    paths.ensure_dirs()
+    SETTINGS.rag.proveedor = proveedor
+    SETTINGS.rag.modelo = modelo
+    _archivo_preferencias().write_text(
+        json.dumps({"proveedor": proveedor, "modelo": modelo}, ensure_ascii=False), encoding="utf-8"
+    )

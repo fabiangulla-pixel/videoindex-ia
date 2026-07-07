@@ -52,6 +52,20 @@ class SemanticChunk:
 
 
 @dataclass
+class Annotation:
+    """Nota manual del usuario ligada a un video y un instante ("aquí se
+    habla de X"). Independiente del pipeline de IA: se puede anotar
+    cualquier video de la biblioteca esté o no transcrito."""
+
+    annotation_id: str
+    video_id: str
+    timestamp_s: float
+    text: str
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
 class Entity:
     entity_id: str
     label: str

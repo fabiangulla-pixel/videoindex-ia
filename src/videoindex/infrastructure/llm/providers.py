@@ -1,8 +1,12 @@
 """Proveedores LLM intercambiables (Dependency Inversion, OA-04).
 
 Cada provider implementa el puerto LLMProvider: ask(system, user) -> str y
-usages() para el costo real. Las API keys llegan por variable de entorno:
-GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY. Ollama no necesita key.
+usages() para el costo real. Las API keys se buscan primero en el Windows
+Credential Manager (guardadas desde el diálogo de Configuración de la GUI,
+ver infrastructure/llm/secrets.py) y, si no hay ninguna ahí, en la variable
+de entorno correspondiente (GEMINI_API_KEY / OPENAI_API_KEY /
+ANTHROPIC_API_KEY) — esto mantiene compatible el uso por CLI/tests sin
+depender de la GUI. Ollama no necesita key.
 
 Los SDK se importan de forma tardía: solo paga la importación quien usa el
 proveedor, y el .exe no requiere tenerlos todos instalados.
@@ -12,16 +16,21 @@ from __future__ import annotations
 
 import os
 
+from videoindex.infrastructure.llm.secrets import load_api_key
+
 
 class ProveedorNoConfigurado(RuntimeError):
     pass
 
 
-def _key(nombre_env: str, proveedor: str) -> str:
-    key = os.environ.get(nombre_env, "").strip()
+def _key(nombre_env: str, proveedor_id: str, nombre_legible: str) -> str:
+    key = load_api_key(proveedor_id)
+    if not key:
+        key = os.environ.get(nombre_env, "").strip()
     if not key:
         raise ProveedorNoConfigurado(
-            f"Falta la API key de {proveedor}: define la variable de entorno {nombre_env}."
+            f"Falta la API key de {nombre_legible}: configúrala en "
+            f"Configuración → API Keys, o define la variable de entorno {nombre_env}."
         )
     return key
 
@@ -41,7 +50,7 @@ class GeminiProvider:
     def ask(self, system: str, user: str) -> str:
         from google import genai
 
-        client = genai.Client(api_key=_key("GEMINI_API_KEY", "Gemini"))
+        client = genai.Client(api_key=_key("GEMINI_API_KEY", "gemini", "Gemini"))
         respuesta = client.models.generate_content(
             model=self._modelo,
             contents=user,
@@ -72,7 +81,7 @@ class OpenAIProvider:
     def ask(self, system: str, user: str) -> str:
         from openai import OpenAI
 
-        client = OpenAI(api_key=_key("OPENAI_API_KEY", "OpenAI"))
+        client = OpenAI(api_key=_key("OPENAI_API_KEY", "openai", "OpenAI"))
         respuesta = client.chat.completions.create(
             model=self._modelo,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -97,7 +106,7 @@ class ClaudeProvider:
     def ask(self, system: str, user: str) -> str:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=_key("ANTHROPIC_API_KEY", "Anthropic"))
+        client = anthropic.Anthropic(api_key=_key("ANTHROPIC_API_KEY", "claude", "Claude"))
         respuesta = client.messages.create(
             model=self._modelo,
             max_tokens=4096,

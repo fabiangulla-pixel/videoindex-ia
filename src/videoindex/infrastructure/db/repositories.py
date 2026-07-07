@@ -6,7 +6,7 @@ import sqlite3
 import unicodedata
 from uuid import uuid4
 
-from videoindex.domain.models import Entity, SemanticChunk, TranscriptSegment, Video
+from videoindex.domain.models import Annotation, Entity, SemanticChunk, TranscriptSegment, Video
 
 
 def normalizar_label(texto: str) -> str:
@@ -328,3 +328,49 @@ class EmbeddingRepo:
             [version_id, *chunk_ids],
         )
         self.con.commit()
+
+
+class AnnotationRepo:
+    """Notas manuales del usuario ligadas a video + timestamp."""
+
+    def __init__(self, con: sqlite3.Connection):
+        self.con = con
+
+    def guardar(self, a: Annotation) -> None:
+        self.con.execute(
+            """INSERT INTO video_annotations
+               (annotation_id, video_id, timestamp_s, text) VALUES (?,?,?,?)""",
+            (a.annotation_id, a.video_id, a.timestamp_s, a.text),
+        )
+        self.con.commit()
+
+    def actualizar_texto(self, annotation_id: str, texto: str) -> None:
+        self.con.execute(
+            """UPDATE video_annotations SET text = ?, updated_at = datetime('now')
+               WHERE annotation_id = ?""",
+            (texto, annotation_id),
+        )
+        self.con.commit()
+
+    def eliminar(self, annotation_id: str) -> None:
+        self.con.execute("DELETE FROM video_annotations WHERE annotation_id = ?", (annotation_id,))
+        self.con.commit()
+
+    def por_video(self, video_id: str) -> list[Annotation]:
+        rows = self.con.execute(
+            """SELECT * FROM video_annotations
+               WHERE video_id = ? ORDER BY timestamp_s""",
+            (video_id,),
+        ).fetchall()
+        return [self._a_modelo(r) for r in rows]
+
+    @staticmethod
+    def _a_modelo(row: sqlite3.Row) -> Annotation:
+        return Annotation(
+            annotation_id=row["annotation_id"],
+            video_id=row["video_id"],
+            timestamp_s=row["timestamp_s"],
+            text=row["text"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )

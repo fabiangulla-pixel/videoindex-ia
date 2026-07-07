@@ -9,6 +9,7 @@ dependencies = [
     "faiss-cpu",
     "spacy",
     "PySide6",
+    "keyring",
 ]
 
 [project.optional-dependencies]

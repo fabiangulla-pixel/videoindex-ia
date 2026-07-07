@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMainWindow, QSplitter, QTabWidget
 
 from videoindex.presentation.library_view import LibraryView
@@ -31,7 +32,20 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         self.busqueda.abrir_video.connect(self.player.abrir_en)
+        self.biblioteca.abrir_video.connect(self.player.abrir_en)
         self.preguntar = None
+
+        menu = self.menuBar().addMenu("&Configuración")
+        accion_config = QAction("API Keys y modelo por defecto…", self)
+        accion_config.triggered.connect(self._abrir_configuracion)
+        menu.addAction(accion_config)
+
+    def _abrir_configuracion(self) -> None:
+        from videoindex.presentation.settings_dialog import ApiSettingsDialog
+
+        ApiSettingsDialog(self).exec()
+        if self.preguntar is not None:
+            self.preguntar.refrescar_proveedor_default()
 
     def agregar_pestana_rag(self, widget) -> None:
         """La pestaña Preguntar se acopla cuando el RAG está configurado (E5)."""

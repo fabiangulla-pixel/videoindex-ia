@@ -6,7 +6,7 @@ Set-Location "$PSScriptRoot\.."
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\pip.exe install faster-whisper sentence-transformers faiss-cpu spacy PySide6 `
-    google-genai openai anthropic pytest ruff pre-commit pyinstaller
+    google-genai openai anthropic keyring pytest ruff pre-commit pyinstaller
 .\.venv\Scripts\python.exe -m spacy download es_core_news_md
 
 # Verificaciones E0

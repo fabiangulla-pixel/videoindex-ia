@@ -15,6 +15,8 @@ $spacyModel = .\.venv\Scripts\python.exe -c "import es_core_news_md, pathlib; pr
     --collect-all faster_whisper `
     --collect-all ctranslate2 `
     --collect-all faiss `
+    --collect-all keyring `
+    --hidden-import keyring.backends.Windows `
     --hidden-import videoindex.presentation.ask_view `
     src\videoindex\app.py
 
