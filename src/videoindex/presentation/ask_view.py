@@ -34,6 +34,7 @@ class EvidenciasWorker(QThread):
         self.query = query
 
     def run(self):
+        con = None
         try:
             from videoindex.infrastructure.db.connection import conectar
 
@@ -41,10 +42,12 @@ class EvidenciasWorker(QThread):
             con = conectar(paths.DB_PATH)  # conexión propia de este hilo
             rag = RAGService(_crear_buscador(servicios, con), SETTINGS.rag)
             evidencias = rag.recuperar_evidencias(self.query)
-            con.close()
             self.listo.emit(self.query, evidencias)
         except Exception as exc:
             self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
 
 
 class PreguntaWorker(QThread):
@@ -59,6 +62,7 @@ class PreguntaWorker(QThread):
         self.modelo = modelo
 
     def run(self):
+        con = None
         try:
             from videoindex.infrastructure.db.connection import conectar
 
@@ -67,10 +71,12 @@ class PreguntaWorker(QThread):
             rag = RAGService(_crear_buscador(servicios, con), SETTINGS.rag)
             llm = crear_provider(self.proveedor, self.modelo)
             answer = rag.preguntar(self.query, self.evidencias, llm, self.proveedor)
-            con.close()
             self.listo.emit(answer)
         except Exception as exc:
             self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
 
 
 class AskView(QWidget):
@@ -131,6 +137,10 @@ class AskView(QWidget):
         self.combo_modelo.addItems(defaults.get(proveedor, []))
 
     def _preguntar(self):
+        # guardia anti-doble-disparo: returnPressed sigue activo aunque el
+        # botón esté deshabilitado, así que se verifica el worker en curso.
+        if self._worker is not None and self._worker.isRunning():
+            return
         query = self.caja.text().strip()
         if not query:
             return
@@ -143,7 +153,13 @@ class AskView(QWidget):
 
     def _confirmar_costo(self, query: str, evidencias: list):
         proveedor = self.combo_proveedor.currentText()
-        modelo = self.combo_modelo.currentText().strip()
+        # Si el usuario deja el combo editable en blanco, se resuelve AQUÍ al
+        # default del proveedor — el mismo valor que usará crear_provider()
+        # más abajo. Antes, "" pasaba tal cual a estimar() (que la trata como
+        # "modelo desconocido" y cotiza con el precio más caro) pero
+        # crear_provider() sí aplicaba su propio default (más barato),
+        # mostrando una estimación de costo que no correspondía a la llamada real.
+        modelo = self.combo_modelo.currentText().strip() or PROVEEDORES[proveedor][1]
 
         if not evidencias:
             # Gate de evidencia: cero llamadas al LLM, cero costo, cero alucinación.
@@ -160,8 +176,13 @@ class AskView(QWidget):
 
         servicios = ServiciosCache.obtener()
         con = conectar(paths.DB_PATH)
-        rag = RAGService(_crear_buscador(servicios, con), SETTINGS.rag)
-        estimacion = rag.estimar(query, evidencias, proveedor, modelo)
+        try:
+            rag = RAGService(_crear_buscador(servicios, con), SETTINGS.rag)
+            estimacion = rag.estimar(query, evidencias, proveedor, modelo)
+        except Exception as exc:
+            con.close()
+            self._error(str(exc))
+            return
         con.close()
 
         # Estándar de costo IA: confirmación previa SIEMPRE que haya gasto.
@@ -211,8 +232,10 @@ class AskView(QWidget):
 
         e: Evidence = item.data(Qt.ItemDataRole.UserRole)
         con = conectar(paths.DB_PATH)
-        fila = ChunkRepo(con).por_ids([e.chunk_id])
-        con.close()
+        try:
+            fila = ChunkRepo(con).por_ids([e.chunk_id])
+        finally:
+            con.close()
         if fila:
             self._abrir_video(fila[0]["video_path"], e.video_title, e.start_time)
 

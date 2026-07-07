@@ -77,8 +77,10 @@ class LibraryView(QWidget):
         from videoindex.infrastructure.db.repositories import VideoRepo
 
         con = conectar(paths.DB_PATH)
-        videos = VideoRepo(con).listar()
-        con.close()
+        try:
+            videos = VideoRepo(con).listar()
+        finally:
+            con.close()
         self.tabla.setRowCount(len(videos))
         for fila, v in enumerate(videos):
             dur = TimeEstimator.humano(v.duration_seconds or 0)
@@ -96,6 +98,8 @@ class LibraryView(QWidget):
                 self.tabla.setItem(fila, col, item)
 
     def _agregar_carpeta(self):
+        if self._worker is not None and self._worker.isRunning():
+            return  # guardia: ya hay un escaneo/lote en curso
         carpeta = QFileDialog.getExistingDirectory(self, "Carpeta con videos")
         if not carpeta:
             return

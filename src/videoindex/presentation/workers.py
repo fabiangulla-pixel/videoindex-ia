@@ -58,6 +58,7 @@ class EscaneoWorker(QThread):
         self.curso = curso
 
     def run(self):
+        con = None
         try:
             from videoindex.application.ingest_service import IngestService
             from videoindex.infrastructure.db.connection import conectar
@@ -66,10 +67,12 @@ class EscaneoWorker(QThread):
             resultado = IngestService(con).escanear_carpeta(
                 self.carpeta, self.curso, self.progreso.emit
             )
-            con.close()
             self.terminado.emit(resultado)
         except Exception as exc:
             self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
 
 
 class PipelineWorker(QThread):
@@ -88,6 +91,7 @@ class PipelineWorker(QThread):
         self.video_ids = video_ids
 
     def run(self):
+        con = None
         try:
             from videoindex.application.pipeline_service import PipelineService
             from videoindex.application.time_estimator import TimeEstimator
@@ -112,10 +116,12 @@ class PipelineWorker(QThread):
             )
             estimador = TimeEstimator(SETTINGS.transcription.factor_tiempo_inicial)
             ok, fail = pipeline.procesar_lote(videos, self.progreso.emit, estimador.calibrar)
-            con.close()
             self.terminado.emit(ok, fail)
         except Exception as exc:
             self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
 
 
 class BusquedaWorker(QThread):
@@ -128,6 +134,7 @@ class BusquedaWorker(QThread):
         self.k = k
 
     def run(self):
+        con = None
         try:
             from videoindex.infrastructure.db.connection import conectar
 
@@ -135,7 +142,9 @@ class BusquedaWorker(QThread):
             con = conectar(paths.DB_PATH)  # conexión propia de este hilo
             buscador = _crear_buscador(servicios, con)
             resultados = buscador.search(self.query, self.k)
-            con.close()
             self.resultados.emit(resultados)
         except Exception as exc:
             self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()

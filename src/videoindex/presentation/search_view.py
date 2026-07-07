@@ -53,6 +53,10 @@ class SearchView(QWidget):
         self._worker = None
 
     def _buscar(self):
+        # guardia anti-doble-disparo: returnPressed sigue activo aunque el
+        # botón esté deshabilitado, así que se verifica el worker en curso.
+        if self._worker is not None and self._worker.isRunning():
+            return
         query = self.caja.text().strip()
         if not query:
             return

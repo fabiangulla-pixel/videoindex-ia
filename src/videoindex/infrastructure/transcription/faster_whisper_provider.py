@@ -38,7 +38,9 @@ class FasterWhisperProvider:
             texto = seg.text.strip()
             if not texto:
                 continue
-            confianza = min(1.0, math.exp(seg.avg_logprob)) if seg.avg_logprob else 0.0
+            # avg_logprob es <= 0; 0.0 es el mejor caso posible (exp(0)=1.0),
+            # así que se compara contra None, no con la verdad booleana de 0.0.
+            confianza = min(1.0, math.exp(seg.avg_logprob)) if seg.avg_logprob is not None else 0.0
             resultado.append(
                 TranscriptSegment(
                     segment_id=str(uuid4()),

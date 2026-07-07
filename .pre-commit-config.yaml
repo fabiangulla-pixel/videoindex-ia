@@ -1,18 +1,23 @@
 repos:
   - repo: local
     hooks:
+      # Rutas ABSOLUTAS al venv del proyecto: el PATH del sistema puede
+      # apuntar a otro Python (aquí, 3.14 global en vez del 3.12 del venv,
+      # que no tiene ruff/pytest instalados) y "python -m ruff" fallaría.
       - id: ruff-check
         name: ruff check
-        entry: .venv/Scripts/ruff.exe check --fix
+        entry: C:/Users/Lenovo/VideoIndexIA/.venv/Scripts/ruff.exe check --fix
         language: system
         types: [python]
+        exclude: ^scripts/_experimentos/
       - id: ruff-format
         name: ruff format
-        entry: .venv/Scripts/ruff.exe format
+        entry: C:/Users/Lenovo/VideoIndexIA/.venv/Scripts/ruff.exe format
         language: system
         types: [python]
+        exclude: ^scripts/_experimentos/
       - id: pytest
         name: pytest (suite rápida)
-        entry: .venv/Scripts/python.exe -m pytest -q
+        entry: C:/Users/Lenovo/VideoIndexIA/.venv/Scripts/python.exe -m pytest -q
         language: system
         pass_filenames: false

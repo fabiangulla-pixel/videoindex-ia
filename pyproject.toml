@@ -18,6 +18,7 @@ dev = ["pytest", "ruff", "pre-commit", "pyinstaller"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+extend-exclude = ["scripts/_experimentos"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]

@@ -31,7 +31,19 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         self.busqueda.abrir_video.connect(self.player.abrir_en)
+        self.preguntar = None
 
     def agregar_pestana_rag(self, widget) -> None:
         """La pestaña Preguntar se acopla cuando el RAG está configurado (E5)."""
+        self.preguntar = widget
         self.tabs.addTab(widget, "💬 Preguntar")
+
+    def closeEvent(self, event) -> None:
+        """Espera a que terminen los QThread en curso antes de cerrar: destruir
+        un QThread vivo (transcripción, búsqueda, RAG) crashea con
+        'QThread: Destroyed while thread is still running'."""
+        for vista in (self.biblioteca, self.busqueda, self.preguntar):
+            worker = getattr(vista, "_worker", None)
+            if worker is not None and worker.isRunning():
+                worker.wait(5000)
+        super().closeEvent(event)

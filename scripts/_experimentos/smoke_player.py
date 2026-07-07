@@ -89,7 +89,9 @@ def main() -> int:
         import os
 
         os._exit(0)
-    print(f"SMOKE FALLO: {estado['error'] or 'sin diagnóstico'} (plan B: instalar K-Lite)", flush=True)
+    print(
+        f"SMOKE FALLO: {estado['error'] or 'sin diagnóstico'} (plan B: instalar K-Lite)", flush=True
+    )
     import os
 
     os._exit(1)

@@ -161,11 +161,19 @@ class ChunkRepo:
         ).fetchall()
 
     def buscar_fts(self, query: str, k: int) -> dict[str, float]:
-        """chunk_id -> bm25 crudo (negativo, menor = mejor). Query saneada."""
+        """chunk_id -> bm25 crudo (negativo, menor = mejor). Query saneada.
+
+        Cada término va entre comillas dobles para tratarlo como frase literal
+        (evita que operadores de FTS5 como NOT/NEAR/* rompan la consulta).
+        Una comilla doble literal dentro del término del usuario se escapa
+        duplicándola (regla de FTS5 para cadenas entrecomilladas), si no
+        `sqlite3.OperationalError: fts5: syntax error` ante términos como
+        `dijo "hola"`.
+        """
         terminos = [t for t in query.split() if t.strip()]
         if not terminos:
             return {}
-        fts_query = " OR ".join(f'"{t}"' for t in terminos)
+        fts_query = " OR ".join(f'"{t.replace(chr(34), chr(34) * 2)}"' for t in terminos)
         rows = self.con.execute(
             """SELECT c.chunk_id, bm25(chunks_fts) AS score
                FROM chunks_fts f JOIN semantic_chunks c ON c.rowid = f.rowid

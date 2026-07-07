@@ -64,6 +64,26 @@ def test_fts_encuentra_sin_tildes(con):
     assert next(iter(hits.values())) < 0
 
 
+def test_fts_query_con_comillas_dobles_no_rompe_sintaxis(con):
+    vrepo, crepo = VideoRepo(con), ChunkRepo(con)
+    v = _video()
+    vrepo.guardar(v)
+    crepo.guardar_lote(
+        [
+            SemanticChunk(
+                chunk_id=str(uuid4()),
+                video_id=v.video_id,
+                start_time=0.0,
+                end_time=60.0,
+                full_text='El profesor dijo "hola" al empezar la clase',
+            )
+        ]
+    )
+    # Una búsqueda con comillas literales no debe lanzar OperationalError.
+    hits = crepo.buscar_fts('dijo "hola"', k=10)
+    assert len(hits) == 1
+
+
 def test_fts_trigger_delete(con):
     vrepo, crepo = VideoRepo(con), ChunkRepo(con)
     v = _video()
