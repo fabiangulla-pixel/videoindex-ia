@@ -18,10 +18,11 @@ from PySide6.QtWidgets import (
 )
 
 from videoindex.application.rag_service import RAGService, _fmt_tiempo
+from videoindex.config import paths
 from videoindex.config.settings import SETTINGS
 from videoindex.domain.models import Evidence, RAGAnswer
 from videoindex.infrastructure.llm.providers import PROVEEDORES, crear_provider
-from videoindex.presentation.workers import ServiciosCache
+from videoindex.presentation.workers import ServiciosCache, _crear_buscador
 
 
 class EvidenciasWorker(QThread):
@@ -34,9 +35,14 @@ class EvidenciasWorker(QThread):
 
     def run(self):
         try:
+            from videoindex.infrastructure.db.connection import conectar
+
             servicios = ServiciosCache.obtener()
-            rag = RAGService(servicios.buscador, SETTINGS.rag)
-            self.listo.emit(self.query, rag.recuperar_evidencias(self.query))
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            rag = RAGService(_crear_buscador(servicios, con), SETTINGS.rag)
+            evidencias = rag.recuperar_evidencias(self.query)
+            con.close()
+            self.listo.emit(self.query, evidencias)
         except Exception as exc:
             self.fallo.emit(str(exc))
 
@@ -54,10 +60,15 @@ class PreguntaWorker(QThread):
 
     def run(self):
         try:
+            from videoindex.infrastructure.db.connection import conectar
+
             servicios = ServiciosCache.obtener()
-            rag = RAGService(servicios.buscador, SETTINGS.rag)
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            rag = RAGService(_crear_buscador(servicios, con), SETTINGS.rag)
             llm = crear_provider(self.proveedor, self.modelo)
-            self.listo.emit(rag.preguntar(self.query, self.evidencias, llm, self.proveedor))
+            answer = rag.preguntar(self.query, self.evidencias, llm, self.proveedor)
+            con.close()
+            self.listo.emit(answer)
         except Exception as exc:
             self.fallo.emit(str(exc))
 
@@ -145,9 +156,13 @@ class AskView(QWidget):
             self.boton.setEnabled(True)
             return
 
+        from videoindex.infrastructure.db.connection import conectar
+
         servicios = ServiciosCache.obtener()
-        rag = RAGService(servicios.buscador, SETTINGS.rag)
+        con = conectar(paths.DB_PATH)
+        rag = RAGService(_crear_buscador(servicios, con), SETTINGS.rag)
         estimacion = rag.estimar(query, evidencias, proveedor, modelo)
+        con.close()
 
         # Estándar de costo IA: confirmación previa SIEMPRE que haya gasto.
         if not estimacion.es_local and (
@@ -191,10 +206,13 @@ class AskView(QWidget):
             )
 
     def _abrir_fuente(self, item: QListWidgetItem):
+        from videoindex.infrastructure.db.connection import conectar
+        from videoindex.infrastructure.db.repositories import ChunkRepo
+
         e: Evidence = item.data(Qt.ItemDataRole.UserRole)
-        # Ruta del video vía el chunk (Evidence no la carga; la resuelve el buscador)
-        servicios = ServiciosCache.obtener()
-        fila = servicios.buscador.chunks.por_ids([e.chunk_id])
+        con = conectar(paths.DB_PATH)
+        fila = ChunkRepo(con).por_ids([e.chunk_id])
+        con.close()
         if fila:
             self._abrir_video(fila[0]["video_path"], e.video_title, e.start_time)
 

@@ -9,29 +9,39 @@ from videoindex.config.settings import SETTINGS
 
 
 class ServiciosCache:
-    """Construcción perezosa y única de los servicios pesados (modelos)."""
+    """Construcción perezosa y única de los modelos pesados (embeddings, NER,
+    índice FAISS) — son costosos de cargar y seguros de compartir entre hilos
+    para lectura.
+
+    SQLite NO se cachea aquí: sqlite3 prohíbe usar una conexión fuera del
+    hilo que la creó, así que cada QThread abre y cierra la suya propia
+    (ver conectar() + SearchEngine(con, ...) en cada worker de abajo).
+    """
 
     _instancia = None
 
     def __init__(self):
-        from videoindex.application.search_engine import SearchEngine
-        from videoindex.infrastructure.db.connection import conectar
         from videoindex.infrastructure.embeddings.local_embeddings import LocalEmbeddingProvider
         from videoindex.infrastructure.ner.spacy_ner_provider import SpacyNERProvider
         from videoindex.infrastructure.vector.faiss_index import FaissIndex
 
         paths.ensure_dirs()
-        self.con = conectar(paths.DB_PATH)
         self.embedder = LocalEmbeddingProvider()
         self.ner = SpacyNERProvider()
         self.faiss = FaissIndex(paths.FAISS_DIR / "v1.faiss", self.embedder.dimensions)
-        self.buscador = SearchEngine(self.con, self.embedder, self.ner, self.faiss, SETTINGS.search)
 
     @classmethod
     def obtener(cls) -> ServiciosCache:
         if cls._instancia is None:
             cls._instancia = cls()
         return cls._instancia
+
+
+def _crear_buscador(servicios: ServiciosCache, con):
+    """SearchEngine nuevo, con la conexión del hilo actual, reusando modelos."""
+    from videoindex.application.search_engine import SearchEngine
+
+    return SearchEngine(con, servicios.embedder, servicios.ner, servicios.faiss, SETTINGS.search)
 
 
 class EscaneoWorker(QThread):
@@ -119,7 +129,13 @@ class BusquedaWorker(QThread):
 
     def run(self):
         try:
+            from videoindex.infrastructure.db.connection import conectar
+
             servicios = ServiciosCache.obtener()
-            self.resultados.emit(servicios.buscador.search(self.query, self.k))
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            buscador = _crear_buscador(servicios, con)
+            resultados = buscador.search(self.query, self.k)
+            con.close()
+            self.resultados.emit(resultados)
         except Exception as exc:
             self.fallo.emit(str(exc))

@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from videoindex.application.time_estimator import TimeEstimator
 from videoindex.config.settings import SETTINGS
-from videoindex.presentation.workers import EscaneoWorker, PipelineWorker, ServiciosCache
+from videoindex.presentation.workers import EscaneoWorker, PipelineWorker
 
 _ETIQUETAS_ESTADO = {
     "pending": "⏳ pendiente",
@@ -72,10 +72,13 @@ class LibraryView(QWidget):
         self.log.appendPlainText(mensaje)
 
     def refrescar(self):
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
         from videoindex.infrastructure.db.repositories import VideoRepo
 
-        servicios = ServiciosCache.obtener()
-        videos = VideoRepo(servicios.con).listar()
+        con = conectar(paths.DB_PATH)
+        videos = VideoRepo(con).listar()
+        con.close()
         self.tabla.setRowCount(len(videos))
         for fila, v in enumerate(videos):
             dur = TimeEstimator.humano(v.duration_seconds or 0)
