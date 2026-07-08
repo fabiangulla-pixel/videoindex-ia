@@ -12,6 +12,7 @@ data/
 build/
 dist/
 *.spec
+*.egg-info/
 
 # Secretos
 .env

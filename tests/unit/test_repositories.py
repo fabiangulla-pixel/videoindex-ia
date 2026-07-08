@@ -5,9 +5,11 @@ from uuid import uuid4
 from tests.conftest import hacer_segmentos
 from videoindex.domain.models import SemanticChunk, Video
 from videoindex.infrastructure.db.repositories import (
+    AnnotationRepo,
     ChunkRepo,
     EmbeddingRepo,
     EntityRepo,
+    ProjectRepo,
     SegmentRepo,
     VideoRepo,
     normalizar_label,
@@ -41,6 +43,28 @@ def test_estado_y_error(con):
     repo.guardar(v)
     repo.actualizar_estado(v.video_id, "failed", "audio vacío")
     assert repo.por_id(v.video_id).processing_status == "failed"
+
+
+def test_pendientes_excluye_completados(con):
+    repo = VideoRepo(con)
+    v1, v2, v3 = _video("v1"), _video("v2"), _video("v3")
+    repo.guardar(v1)
+    repo.guardar(v2)
+    repo.guardar(v3)
+    repo.actualizar_estado(v1.video_id, "completed")
+    repo.actualizar_estado(v2.video_id, "transcribing")
+    # v3 se queda en "pending" (default de guardar())
+
+    pendientes_ids = {v.video_id for v in repo.pendientes()}
+    assert pendientes_ids == {v2.video_id, v3.video_id}
+
+
+def test_pendientes_vacio_si_todo_completado(con):
+    repo = VideoRepo(con)
+    v = _video()
+    repo.guardar(v)
+    repo.actualizar_estado(v.video_id, "completed")
+    assert repo.pendientes() == []
 
 
 def test_content_start_se_guarda_y_lee(con):
@@ -223,3 +247,101 @@ def test_entidades_de_video_sin_menciones_devuelve_vacio(con):
     entidades, chunks_por_entidad = erepo.catalogo_de_video(v.video_id)
     assert entidades == {}
     assert chunks_por_entidad == {}
+
+
+def test_proyecto_crear_y_listar(con):
+    repo = ProjectRepo(con)
+    p1 = repo.crear("Seminario X")
+    p2 = repo.crear("Curso Y")
+    nombres = {p.name for p in repo.listar()}
+    assert nombres == {"Seminario X", "Curso Y"}
+    assert p1.project_id != p2.project_id
+
+
+def test_video_guardar_con_proyecto_y_listar_filtra(con):
+    vrepo, prepo = VideoRepo(con), ProjectRepo(con)
+    proyecto = prepo.crear("Seminario X")
+    v1 = _video("v1")
+    v1.project_id = proyecto.project_id
+    v2 = _video("v2")  # sin proyecto
+    vrepo.guardar(v1)
+    vrepo.guardar(v2)
+
+    assert len(vrepo.listar()) == 2  # sentinel "__todos__" por default: no filtra
+    assert [v.video_id for v in vrepo.listar(proyecto.project_id)] == [v1.video_id]
+    assert [v.video_id for v in vrepo.listar(None)] == [v2.video_id]  # "sin proyecto"
+
+
+def test_video_asignar_proyecto(con):
+    vrepo, prepo = VideoRepo(con), ProjectRepo(con)
+    proyecto = prepo.crear("Seminario X")
+    v = _video()
+    vrepo.guardar(v)
+    assert vrepo.por_id(v.video_id).project_id is None
+
+    vrepo.asignar_proyecto(v.video_id, proyecto.project_id)
+    assert vrepo.por_id(v.video_id).project_id == proyecto.project_id
+
+    vrepo.asignar_proyecto(v.video_id, None)  # desasignar
+    assert vrepo.por_id(v.video_id).project_id is None
+
+
+def test_video_eliminar_borra_el_registro(con):
+    vrepo = VideoRepo(con)
+    v = _video()
+    vrepo.guardar(v)
+    vrepo.eliminar(v.video_id)
+    assert vrepo.por_id(v.video_id) is None
+
+
+def test_video_eliminar_pone_null_en_project_id_por_fk(con):
+    """FK ON DELETE SET NULL de projects: no aplica aquí (video referencia
+    project, no al revés) — este test cubre el caso real: borrar un PROYECTO
+    no debería ser necesario para el MVP, pero si projects se borra sin CASCADE
+    explícito, video.project_id debe quedar NULL, no un id huérfano."""
+    vrepo, prepo = VideoRepo(con), ProjectRepo(con)
+    proyecto = prepo.crear("Seminario X")
+    v = _video()
+    v.project_id = proyecto.project_id
+    vrepo.guardar(v)
+    con.execute("DELETE FROM projects WHERE project_id = ?", (proyecto.project_id,))
+    con.commit()
+    assert vrepo.por_id(v.video_id).project_id is None
+
+
+def test_entity_repo_eliminar_por_video_borra_solo_menciones_de_ese_video(con):
+    vrepo, crepo, erepo = VideoRepo(con), ChunkRepo(con), EntityRepo(con)
+    v1, v2 = _video("v1"), _video("v2")
+    vrepo.guardar(v1)
+    vrepo.guardar(v2)
+    c1 = SemanticChunk(
+        chunk_id=str(uuid4()), video_id=v1.video_id, start_time=0.0, end_time=10.0, full_text="a"
+    )
+    c2 = SemanticChunk(
+        chunk_id=str(uuid4()), video_id=v2.video_id, start_time=0.0, end_time=10.0, full_text="b"
+    )
+    crepo.guardar_lote([c1, c2])
+    petro = erepo.upsert("Petro", "persona")
+    erepo.registrar_mencion(petro.entity_id, c1.chunk_id, v1.video_id, "Petro")
+    erepo.registrar_mencion(petro.entity_id, c2.chunk_id, v2.video_id, "Petro")
+
+    erepo.eliminar_por_video(v1.video_id)
+
+    entidades_v2, _ = erepo.catalogo_de_video(v2.video_id)
+    assert petro.entity_id in entidades_v2  # la mención de v2 sobrevive
+    entidades_v1, _ = erepo.catalogo_de_video(v1.video_id)
+    assert entidades_v1 == {}
+
+
+def test_annotation_repo_eliminar_por_video(con):
+    from videoindex.domain.models import Annotation
+
+    vrepo, arepo = VideoRepo(con), AnnotationRepo(con)
+    v = _video()
+    vrepo.guardar(v)
+    arepo.guardar(
+        Annotation(annotation_id=str(uuid4()), video_id=v.video_id, timestamp_s=1.0, text="nota")
+    )
+    assert len(arepo.por_video(v.video_id)) == 1
+    arepo.eliminar_por_video(v.video_id)
+    assert arepo.por_video(v.video_id) == []

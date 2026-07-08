@@ -54,6 +54,22 @@ class DossierConfirmDialog(QDialog):
 
     def _modelos_del_proveedor(self, proveedor: str):
         self.combo_modelo.clear()
+        if proveedor == "lmstudio":
+            from videoindex.infrastructure.llm.providers import modelos_cargados_lmstudio
+
+            modelos = modelos_cargados_lmstudio()
+            if not modelos:
+                self.combo_modelo.setPlaceholderText("LM Studio no responde (¿servidor iniciado?)")
+            self.combo_modelo.addItems(modelos)
+            return
+        if proveedor == "ollama":
+            from videoindex.infrastructure.llm.providers import modelos_instalados_ollama
+
+            modelos = modelos_instalados_ollama()
+            if not modelos:
+                self.combo_modelo.setPlaceholderText("Ollama no responde (¿servidor iniciado?)")
+            self.combo_modelo.addItems(modelos)
+            return
         self.combo_modelo.addItems(MODELOS_POR_PROVEEDOR.get(proveedor, []))
 
     def proveedor_modelo(self) -> tuple[str, str]:

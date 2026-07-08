@@ -11,6 +11,7 @@ Adaptado de TarotCultural corpus_pipeline/transcribir.py. Cambios:
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from functools import lru_cache
 from uuid import uuid4
 
@@ -41,9 +42,18 @@ class FasterWhisperProvider:
         self.initial_prompt = initial_prompt
         self.condition_on_previous_text = condition_on_previous_text
 
-    def transcribir(self, ruta_video: str, video_id: str) -> list[TranscriptSegment]:
+    def transcribir(
+        self,
+        ruta_video: str,
+        video_id: str,
+        progreso: Callable[[float], None] | None = None,
+    ) -> list[TranscriptSegment]:
+        """progreso(fraccion): avance real dentro de ESTE video, calculado
+        como seg.end / duración total (faster-whisper no expone un % nativo;
+        los segmentos SÍ traen timestamp absoluto conforme se van generando,
+        así que se deriva de ahí en vez de solo reportar por-video del lote)."""
         model = _modelo(self.nombre_modelo, self.compute_type)
-        segments, _info = model.transcribe(
+        segments, info = model.transcribe(
             ruta_video,
             language=self.idioma,
             vad_filter=True,
@@ -51,8 +61,11 @@ class FasterWhisperProvider:
             initial_prompt=self.initial_prompt or None,
             condition_on_previous_text=self.condition_on_previous_text,
         )
+        duracion_total = info.duration or 0.0
         resultado: list[TranscriptSegment] = []
         for seg in segments:
+            if progreso and duracion_total > 0:
+                progreso(min(1.0, seg.end / duracion_total))
             texto = seg.text.strip()
             if not texto:
                 continue

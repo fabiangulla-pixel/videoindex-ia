@@ -63,13 +63,15 @@ class FakeTranscriptionProvider:
         self.fallar_en = fallar_en or set()
         self.llamadas: list[str] = []
 
-    def transcribir(self, ruta_video: str, video_id: str) -> list[TranscriptSegment]:
+    def transcribir(self, ruta_video: str, video_id: str, progreso=None) -> list[TranscriptSegment]:
         self.llamadas.append(ruta_video)
         if ruta_video in self.fallar_en:
             raise RuntimeError(f"fallo simulado en {ruta_video}")
         segs = self.segmentos_por_ruta.get(ruta_video, [])
         for s in segs:
             s.video_id = video_id
+        if progreso:
+            progreso(1.0)
         return segs
 
 

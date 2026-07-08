@@ -19,6 +19,7 @@ Gemini (ai.google.dev/gemini-api/docs/pricing):
 Claude (skill claude-api, tabla oficial cacheada 2026-06):
 - claude-opus-4-8 $5/$25 · claude-sonnet-5 $3/$15 · claude-haiku-4-5 $1/$5
 Ollama: local, $0.
+LM Studio: local, $0.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from dataclasses import dataclass, field
 
 PRECIOS_VERIFICADOS_EL = "2026-07-06"
 
-PROVEEDORES_LOCALES = {"ollama"}
+PROVEEDORES_LOCALES = {"ollama", "lmstudio"}
 
 
 @dataclass(frozen=True)

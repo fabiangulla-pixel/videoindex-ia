@@ -24,6 +24,7 @@ from videoindex.presentation.dossier_view import DossierConfirmDialog, DossierRe
 from videoindex.presentation.workers import (
     DossierGenerarWorker,
     DossierRecopilarWorker,
+    EliminarVideoWorker,
     EscaneoWorker,
     PipelineWorker,
 )
@@ -46,12 +47,14 @@ class LibraryView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.boton_agregar = QPushButton("📂 Agregar carpeta…")
+        self.boton_continuar = QPushButton("▶ Continuar procesando")
+        self.boton_continuar.setVisible(False)  # solo si hay pendientes (ver refrescar())
         self.progreso = QProgressBar()
         self.progreso.setVisible(False)
         self.etiqueta_estado = QLabel("")
 
-        self.tabla = QTableWidget(0, 4)
-        self.tabla.setHorizontalHeaderLabels(["Título", "Curso", "Duración", "Estado"])
+        self.tabla = QTableWidget(0, 5)
+        self.tabla.setHorizontalHeaderLabels(["Título", "Proyecto", "Curso", "Duración", "Estado"])
         self.tabla.horizontalHeader().setStretchLastSection(True)
         self.tabla.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabla.itemDoubleClicked.connect(self._abrir_seleccionado)
@@ -68,6 +71,7 @@ class LibraryView(QWidget):
 
         barra = QHBoxLayout()
         barra.addWidget(self.boton_agregar)
+        barra.addWidget(self.boton_continuar)
         barra.addWidget(self.etiqueta_estado, stretch=1)
 
         layout = QVBoxLayout(self)
@@ -78,8 +82,24 @@ class LibraryView(QWidget):
         layout.addWidget(self.log)
 
         self.boton_agregar.clicked.connect(self._agregar_carpeta)
+        self.boton_continuar.clicked.connect(self.continuar_procesando)
         self._worker = None
         self._worker_dossier = None  # flujo independiente de la ingesta
+        self._worker_eliminar = None  # flujo independiente de la ingesta
+        # Mismo sentinel que VideoRepo.listar(project_id=...): "__todos__" no
+        # filtra, None filtra por "sin proyecto", cualquier otro string es
+        # un project_id real.
+        self._proyecto_activo: str | None = "__todos__"
+        # Proyecto al que se asignan los videos NUEVOS al escanear una
+        # carpeta (None si el filtro activo es "Todos" o "Sin proyecto").
+        # Lo setea MainWindow junto con filtrar_por_proyecto.
+        self.proyecto_para_ingesta: str | None = None
+        self._ultima_etapa_registrada: tuple[str, str] | None = None
+        self.refrescar()
+
+    def filtrar_por_proyecto(self, project_id: str | None) -> None:
+        """Conectado a ProjectSelector.proyecto_cambiado."""
+        self._proyecto_activo = project_id
         self.refrescar()
 
     def _registrar(self, mensaje: str) -> None:
@@ -88,19 +108,27 @@ class LibraryView(QWidget):
     def refrescar(self):
         from videoindex.config import paths
         from videoindex.infrastructure.db.connection import conectar
-        from videoindex.infrastructure.db.repositories import VideoRepo
+        from videoindex.infrastructure.db.repositories import ProjectRepo, VideoRepo
 
         con = conectar(paths.DB_PATH)
         try:
-            videos = VideoRepo(con).listar()
+            videos = VideoRepo(con).listar(self._proyecto_activo)
+            nombres_proyecto = {p.project_id: p.name for p in ProjectRepo(con).listar()}
+            n_pendientes = len(VideoRepo(con).pendientes())
         finally:
             con.close()
+        # Visible solo si hay algo que continuar: no tiene sentido el botón
+        # en una biblioteca donde todo ya está "completed".
+        self.boton_continuar.setVisible(n_pendientes > 0)
+        if n_pendientes > 0:
+            self.boton_continuar.setText(f"▶ Continuar procesando ({n_pendientes})")
         self.tabla.setRowCount(len(videos))
         for fila, v in enumerate(videos):
             dur = TimeEstimator.humano(v.duration_seconds or 0)
             for col, texto in enumerate(
                 [
                     v.title,
+                    nombres_proyecto.get(v.project_id, "—"),
                     v.course_name or "—",
                     dur,
                     _ETIQUETAS_ESTADO.get(v.processing_status, v.processing_status),
@@ -128,18 +156,65 @@ class LibraryView(QWidget):
             return
         fila = item.row()
         item_titulo = self.tabla.item(fila, 0)
-        estado_item = self.tabla.item(fila, 3)
+        estado_item = self.tabla.item(fila, 4)
         if item_titulo is None or estado_item is None:
             return
         video_id, _ruta = item_titulo.data(Qt.ItemDataRole.UserRole)
+        proyecto_item = self.tabla.item(fila, 1)
+        tiene_proyecto = proyecto_item is not None and proyecto_item.text() != "—"
 
         menu = QMenu(self)
-        accion = menu.addAction("📄 Generar dossier del video…")
+        accion_dossier = menu.addAction("📄 Generar dossier del video…")
         # Sin chunks (video no completado) no hay nada que agrupar por entidad.
-        accion.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
+        accion_dossier.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
+        menu.addSeparator()
+        accion_desasignar = menu.addAction("📤 Quitar del proyecto")
+        accion_desasignar.setEnabled(tiene_proyecto)
+        accion_eliminar = menu.addAction("🗑 Eliminar de la biblioteca…")
         elegida = menu.exec(self.tabla.viewport().mapToGlobal(pos))
-        if elegida == accion:
+        if elegida == accion_dossier:
             self._iniciar_dossier(video_id, item_titulo.text())
+        elif elegida == accion_desasignar:
+            self._desasignar_proyecto(video_id)
+        elif elegida == accion_eliminar:
+            self._confirmar_eliminar(video_id, item_titulo.text())
+
+    def _desasignar_proyecto(self, video_id: str) -> None:
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
+        from videoindex.infrastructure.db.repositories import VideoRepo
+
+        con = conectar(paths.DB_PATH)
+        try:
+            VideoRepo(con).asignar_proyecto(video_id, None)
+        finally:
+            con.close()
+        self.refrescar()
+
+    def _confirmar_eliminar(self, video_id: str, titulo: str) -> None:
+        if self._worker_eliminar is not None and self._worker_eliminar.isRunning():
+            return  # guardia anti-doble-disparo
+        respuesta = QMessageBox.question(
+            self,
+            "Eliminar video",
+            f'¿Eliminar "{titulo}" de la biblioteca?\n\n'
+            "Se borra la transcripción, los fragmentos indexados, entidades y "
+            "anotaciones. El archivo de video en disco NO se toca.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+        self.etiqueta_estado.setText(f'Eliminando "{titulo}"…')
+        self._registrar(f'Eliminando de la biblioteca: "{titulo}"')
+        self._worker_eliminar = EliminarVideoWorker(video_id)
+        self._worker_eliminar.terminado.connect(self._on_eliminado)
+        self._worker_eliminar.fallo.connect(self._error)
+        self._worker_eliminar.start()
+
+    def _on_eliminado(self, video_id: str) -> None:
+        self.etiqueta_estado.setText("Video eliminado de la biblioteca.")
+        self._registrar(f"[{video_id[:8]}] eliminado de la biblioteca.")
+        self.refrescar()
 
     def _iniciar_dossier(self, video_id: str, titulo: str) -> None:
         if self._worker_dossier is not None and self._worker_dossier.isRunning():
@@ -208,7 +283,7 @@ class LibraryView(QWidget):
         self.boton_agregar.setEnabled(False)  # guardia anti-doble-clic
         self.progreso.setVisible(True)
         self.progreso.setRange(0, 0)  # indeterminada hasta saber el total de archivos
-        self._worker = EscaneoWorker(carpeta)
+        self._worker = EscaneoWorker(carpeta, project_id=self.proyecto_para_ingesta)
         self._worker.progreso.connect(self._on_progreso_escaneo)
         self._worker.terminado.connect(self._confirmar_lote)
         self._worker.fallo.connect(self._error)
@@ -229,12 +304,35 @@ class LibraryView(QWidget):
             self._registrar("Escaneo terminado: nada nuevo que procesar.")
             self.boton_agregar.setEnabled(True)
             return
+        self._confirmar_y_procesar(por_procesar)
 
+    def continuar_procesando(self):
+        if self._worker is not None and self._worker.isRunning():
+            return  # guardia: ya hay un escaneo/lote en curso
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
+        from videoindex.infrastructure.db.repositories import VideoRepo
+
+        con = conectar(paths.DB_PATH)
+        try:
+            pendientes = VideoRepo(con).pendientes()
+        finally:
+            con.close()
+        if not pendientes:
+            self.refrescar()  # oculta el botón si ya no hay pendientes
+            return
+        self._confirmar_y_procesar(pendientes)
+
+    def _confirmar_y_procesar(self, videos) -> None:
+        """Compartido por 'Agregar carpeta' (tras escanear) y 'Continuar
+        procesando' (sobre lo ya pendiente en la biblioteca, sin re-escanear
+        ninguna carpeta): mismo diálogo de ETA/costo y el mismo PipelineWorker."""
         estimador = TimeEstimator(SETTINGS.transcription.factor_tiempo_inicial)
-        eta = estimador.eta_lote([v.duration_seconds or 0 for v in por_procesar])
+        horas = sum(v.duration_seconds or 0.0 for v in videos) / 3600
+        eta = estimador.eta_lote([v.duration_seconds or 0 for v in videos])
         detalle = (
-            f"Videos por procesar: {len(por_procesar)}\n"
-            f"Material: {resultado.horas_totales:.1f} horas\n\n"
+            f"Videos por procesar: {len(videos)}\n"
+            f"Material: {horas:.1f} horas\n\n"
             f"Costo API: $0 (transcripción y embeddings 100% locales)\n"
             f"Tiempo estimado: ~{TimeEstimator.humano(eta)} "
             f"(whisper {SETTINGS.transcription.modelo}, CPU)\n\n"
@@ -250,18 +348,26 @@ class LibraryView(QWidget):
 
         self.progreso.setVisible(True)
         self.progreso.setRange(0, 100)
-        self._worker = PipelineWorker([v.video_id for v in por_procesar])
+        self._worker = PipelineWorker([v.video_id for v in videos])
         self._worker.progreso.connect(self._on_progreso)
         self._worker.terminado.connect(self._on_terminado)
         self._worker.fallo.connect(self._error)
         self._worker.start()
 
     def _on_progreso(self, video_id: str, etapa: str, fraccion: float):
-        self.progreso.setValue(int(fraccion * 100))
+        porcentaje = int(fraccion * 100)
+        self.progreso.setValue(porcentaje)
         etiqueta = _ETIQUETAS_ESTADO.get(etapa, etapa)
-        self.etiqueta_estado.setText(etiqueta)
-        self._registrar(f"[{video_id[:8]}] {etiqueta}")
-        self.refrescar()
+        self.etiqueta_estado.setText(f"{etiqueta} ({porcentaje}%)")
+        # "transcribing" se reporta por cada segmento de habla (decenas/cientos
+        # por video): solo se registra en el log y se refresca la tabla en el
+        # CAMBIO de etapa, no en cada tick de progreso interno — si no, el log
+        # y la recarga de la tabla desde SQLite inundarían la UI.
+        clave = (video_id, etapa)
+        if clave != self._ultima_etapa_registrada:
+            self._ultima_etapa_registrada = clave
+            self._registrar(f"[{video_id[:8]}] {etiqueta}")
+            self.refrescar()
 
     def _on_terminado(self, ok: int, fail: int):
         self.progreso.setVisible(False)

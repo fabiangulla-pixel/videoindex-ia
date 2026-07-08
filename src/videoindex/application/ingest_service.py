@@ -44,6 +44,7 @@ class IngestService:
         carpeta: str | Path,
         course_name: str | None = None,
         progreso: Callable[[int, int, str], None] | None = None,
+        project_id: str | None = None,
     ) -> ResultadoIngesta:
         """progreso(indice_1based, total, nombre_archivo) — para mostrar avance
         durante el cálculo de checksum, que puede tardar en archivos grandes
@@ -77,6 +78,7 @@ class IngestService:
                 duration_seconds=duracion_segundos(archivo),
                 course_name=course_name,
                 session_name=archivo.stem,
+                project_id=project_id,
             )
             self.videos.guardar(video)
             resultado.nuevos.append(video)

@@ -32,12 +32,26 @@ _V3_CONTENT_START = """
 ALTER TABLE videos ADD COLUMN content_start_s REAL;
 """
 
+# Proyectos: agrupador real de videos (antes solo existía course_name como
+# texto libre sin uso en la GUI). Un video sin proyecto asignado queda con
+# project_id NULL ("Sin proyecto"), no se fuerza migrar datos existentes.
+_V4_PROYECTOS = """
+CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+ALTER TABLE videos ADD COLUMN project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_videos_project ON videos(project_id);
+"""
+
 # Cada entrada: (versión, SQL). La v1 es el schema.sql completo; futuras
 # migraciones se agregan aquí como ALTER/CREATE incrementales.
 _MIGRACIONES: list[tuple[int, str]] = [
     (1, _SCHEMA_SQL.read_text(encoding="utf-8")),
     (2, _V2_ANOTACIONES),
     (3, _V3_CONTENT_START),
+    (4, _V4_PROYECTOS),
 ]
 
 

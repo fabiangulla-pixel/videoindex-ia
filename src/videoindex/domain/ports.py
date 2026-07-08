@@ -5,14 +5,21 @@ Las capas superiores dependen de estos Protocols, nunca de implementaciones.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 
 from videoindex.domain.models import TranscriptSegment
 
 
 class TranscriptionProvider(Protocol):
-    def transcribir(self, ruta_video: str, video_id: str) -> list[TranscriptSegment]:
-        """Transcribe el video completo con timestamps absolutos en segundos."""
+    def transcribir(
+        self,
+        ruta_video: str,
+        video_id: str,
+        progreso: Callable[[float], None] | None = None,
+    ) -> list[TranscriptSegment]:
+        """Transcribe el video completo con timestamps absolutos en segundos.
+        progreso(fraccion 0..1): avance real dentro de este video, opcional."""
         ...
 
 

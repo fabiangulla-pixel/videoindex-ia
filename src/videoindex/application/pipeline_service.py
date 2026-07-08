@@ -80,7 +80,7 @@ class PipelineService:
             fraccion = i / len(videos) if videos else 1.0
             try:
                 inicio = time.time()
-                self._procesar_video(video, progress, fraccion)
+                self._procesar_video(video, progress, fraccion, len(videos))
                 transcurrido = time.time() - inicio
                 if calibrar and video.duration_seconds:
                     calibrar(video.duration_seconds, transcurrido)
@@ -92,12 +92,15 @@ class PipelineService:
         return ok, fail
 
     def _procesar_video(
-        self, video: Video, progress: ProgressCallback | None, fraccion: float
+        self, video: Video, progress: ProgressCallback | None, fraccion: float, n_videos: int
     ) -> None:
-        def avisar(etapa: str) -> None:
+        def avisar(etapa: str, fraccion_interna: float = 0.0) -> None:
             log.info("video_id=%s stage=%s", video.video_id, etapa)
             if progress:
-                progress(video.video_id, etapa, fraccion)
+                # fraccion_interna (0..1) reparte el "hueco" de este video
+                # dentro del lote (transcribir es la etapa que más tarda con
+                # diferencia; el resto avisa siempre con fraccion_interna=0).
+                progress(video.video_id, etapa, fraccion + fraccion_interna / n_videos)
 
         self._limpiar_derivados(video.video_id)
 
@@ -107,7 +110,9 @@ class PipelineService:
 
         avisar("transcribing")
         self.videos.actualizar_estado(video.video_id, "transcribing")
-        segs = self.transcriptor.transcribir(video.path, video.video_id)
+        segs = self.transcriptor.transcribir(
+            video.path, video.video_id, lambda f: avisar("transcribing", f)
+        )
         if not segs:
             raise ValueError("La transcripción no produjo segmentos (¿audio vacío?)")
         self.segmentos.guardar_lote(segs)

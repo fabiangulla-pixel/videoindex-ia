@@ -38,3 +38,18 @@ def test_escanear_carpeta_idempotente_por_checksum(con, tmp_path):
     r2 = IngestService(con).escanear_carpeta(tmp_path)
     assert len(r2.nuevos) == 0
     assert len(r2.pendientes_previos) == 1
+
+
+def test_escanear_carpeta_asigna_proyecto_a_videos_nuevos(con, tmp_path):
+    from videoindex.infrastructure.db.repositories import ProjectRepo
+
+    proyecto = ProjectRepo(con).crear("Seminario X")
+    _crear_video(tmp_path, "a.mp4")
+    resultado = IngestService(con).escanear_carpeta(tmp_path, project_id=proyecto.project_id)
+    assert resultado.nuevos[0].project_id == proyecto.project_id
+
+
+def test_escanear_carpeta_sin_project_id_deja_video_sin_proyecto(con, tmp_path):
+    _crear_video(tmp_path, "a.mp4")
+    resultado = IngestService(con).escanear_carpeta(tmp_path)
+    assert resultado.nuevos[0].project_id is None

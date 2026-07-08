@@ -6,7 +6,14 @@ import sqlite3
 import unicodedata
 from uuid import uuid4
 
-from videoindex.domain.models import Annotation, Entity, SemanticChunk, TranscriptSegment, Video
+from videoindex.domain.models import (
+    Annotation,
+    Entity,
+    Project,
+    SemanticChunk,
+    TranscriptSegment,
+    Video,
+)
 
 
 def normalizar_label(texto: str) -> str:
@@ -30,8 +37,9 @@ class VideoRepo:
     def guardar(self, v: Video) -> None:
         self.con.execute(
             """INSERT INTO videos (video_id, title, path, checksum, duration_seconds,
-                                   course_name, session_name, processing_status, content_start_s)
-               VALUES (?,?,?,?,?,?,?,?,?)
+                                   course_name, session_name, processing_status, content_start_s,
+                                   project_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(checksum) DO UPDATE SET path=excluded.path, title=excluded.title""",
             (
                 v.video_id,
@@ -43,6 +51,7 @@ class VideoRepo:
                 v.session_name,
                 v.processing_status,
                 v.content_start_s,
+                v.project_id,
             ),
         )
         self.con.commit()
@@ -61,8 +70,44 @@ class VideoRepo:
         )
         self.con.commit()
 
-    def listar(self) -> list[Video]:
-        rows = self.con.execute("SELECT * FROM videos ORDER BY created_at").fetchall()
+    def asignar_proyecto(self, video_id: str, project_id: str | None) -> None:
+        self.con.execute(
+            "UPDATE videos SET project_id = ? WHERE video_id = ?", (project_id, video_id)
+        )
+        self.con.commit()
+
+    def eliminar(self, video_id: str) -> None:
+        """Solo el registro de videos; el resto de tablas relacionadas
+        (segments/chunks/entities/annotations) se borran aparte, coordinado
+        desde el service (patrón ChunkRepo.borrar_por_video: FAISS también
+        necesita limpieza manual, no lo cubre ON DELETE CASCADE de SQL)."""
+        self.con.execute("DELETE FROM videos WHERE video_id = ?", (video_id,))
+        self.con.commit()
+
+    def listar(self, project_id: str | None = "__todos__") -> list[Video]:
+        """project_id: None filtra 'sin proyecto'; el sentinel '__todos__'
+        (default) no filtra, para no romper la firma con dos significados
+        de None (sin argumento vs. filtrar por 'sin proyecto')."""
+        if project_id == "__todos__":
+            rows = self.con.execute("SELECT * FROM videos ORDER BY created_at").fetchall()
+        elif project_id is None:
+            rows = self.con.execute(
+                "SELECT * FROM videos WHERE project_id IS NULL ORDER BY created_at"
+            ).fetchall()
+        else:
+            rows = self.con.execute(
+                "SELECT * FROM videos WHERE project_id = ? ORDER BY created_at", (project_id,)
+            ).fetchall()
+        return [self._a_modelo(r) for r in rows]
+
+    def pendientes(self) -> list[Video]:
+        """Videos que aún no llegaron a 'completed' (pending, o a media
+        transcripción/segmentación/etc. si el pipeline se interrumpió) — el
+        universo real de "continuar procesando", sin importar de qué carpeta
+        o sesión de escaneo vinieron."""
+        rows = self.con.execute(
+            "SELECT * FROM videos WHERE processing_status != 'completed' ORDER BY created_at"
+        ).fetchall()
         return [self._a_modelo(r) for r in rows]
 
     @staticmethod
@@ -77,7 +122,28 @@ class VideoRepo:
             session_name=row["session_name"],
             processing_status=row["processing_status"],
             content_start_s=row["content_start_s"],
+            project_id=row["project_id"],
         )
+
+
+class ProjectRepo:
+    def __init__(self, con: sqlite3.Connection):
+        self.con = con
+
+    def crear(self, name: str) -> Project:
+        p = Project(project_id=str(uuid4()), name=name)
+        self.con.execute(
+            "INSERT INTO projects (project_id, name) VALUES (?,?)", (p.project_id, p.name)
+        )
+        self.con.commit()
+        return p
+
+    def listar(self) -> list[Project]:
+        rows = self.con.execute("SELECT * FROM projects ORDER BY created_at").fetchall()
+        return [
+            Project(project_id=r["project_id"], name=r["name"], created_at=r["created_at"])
+            for r in rows
+        ]
 
 
 class SegmentRepo:
@@ -300,6 +366,14 @@ class EntityRepo:
             chunks_por_entidad.setdefault(eid, []).append(r["chunk_id"])
         return entidades, chunks_por_entidad
 
+    def eliminar_por_video(self, video_id: str) -> None:
+        """Borra las menciones del video. Las entidades en sí (tabla entities)
+        y sus relaciones de co-ocurrencia se quedan: pueden estar respaldadas
+        por menciones de OTROS videos, y una entidad sin menciones no molesta
+        (no aparece en catalogo_de_video de ningún video)."""
+        self.con.execute("DELETE FROM entity_mentions WHERE video_id = ?", (video_id,))
+        self.con.commit()
+
     def registrar_coocurrencia(self, entity_a: str, entity_b: str) -> None:
         """KG simple del MVP: UPSERT weight+1 sobre el par ordenado."""
         src, tgt = sorted((entity_a, entity_b))
@@ -416,6 +490,10 @@ class AnnotationRepo:
             (video_id,),
         ).fetchall()
         return [self._a_modelo(r) for r in rows]
+
+    def eliminar_por_video(self, video_id: str) -> None:
+        self.con.execute("DELETE FROM video_annotations WHERE video_id = ?", (video_id,))
+        self.con.commit()
 
     @staticmethod
     def _a_modelo(row: sqlite3.Row) -> Annotation:

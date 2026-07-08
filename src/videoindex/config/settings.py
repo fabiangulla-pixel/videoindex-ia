@@ -53,6 +53,9 @@ MODELOS_POR_PROVEEDOR: dict[str, list[str]] = {
     "openai": ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-4.1-mini"],
     "claude": ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
     "ollama": ["llama3.1", "qwen2.5", "mistral"],
+    # lmstudio no tiene catálogo fijo: se llena en la GUI consultando
+    # /v1/models del servidor local (lo que el usuario tenga cargado ahí).
+    "lmstudio": [],
 }
 
 

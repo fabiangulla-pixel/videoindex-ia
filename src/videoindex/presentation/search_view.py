@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -17,6 +18,11 @@ from PySide6.QtWidgets import (
 
 from videoindex.domain.models import SearchResult
 from videoindex.presentation.workers import BusquedaWorker
+
+# "Todos" no es ilimitado: un techo alto (ver SearchEngine.search — sube
+# candidatos_por_fuente hasta este k) para no inundar la lista con miles de
+# ítems si el corpus crece mucho.
+_OPCIONES_CANTIDAD = [("10", 10), ("25", 25), ("50", 50), ("Todos", 500)]
 
 
 def _fmt(segundos: float) -> str:
@@ -32,18 +38,37 @@ class SearchView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.caja = QLineEdit()
-        self.caja.setPlaceholderText("Buscar un concepto, definición, ejemplo…")
+        self.caja.setPlaceholderText(
+            'p. ej. "cómo se entrena un modelo con los datos de la empresa"'
+        )
+        self.combo_cantidad = QComboBox()
+        for etiqueta, _valor in _OPCIONES_CANTIDAD:
+            self.combo_cantidad.addItem(etiqueta)
+        self.combo_cantidad.setCurrentIndex(0)  # 10, mismo comportamiento de antes
         self.boton = QPushButton("🔍 Buscar")
         self.estado = QLabel("")
+        # Una palabra suelta y muy frecuente en el video (p. ej. "datos" en
+        # una charla sobre IA) no discrimina: casi todos los chunks la
+        # mencionan y se parecen semánticamente entre sí. Una frase describe
+        # LA IDEA, no solo una palabra, y ahí la búsqueda semántica sí rinde.
+        self.pista = QLabel(
+            "💡 Mejor una frase que describa la idea que buscas que una sola palabra "
+            "(las palabras sueltas muy comunes en el video no ayudan a discriminar)."
+        )
+        self.pista.setStyleSheet("color: gray; font-size: 11px;")
+        self.pista.setWordWrap(True)
         self.lista = QListWidget()
         self.lista.setWordWrap(True)
 
         barra = QHBoxLayout()
         barra.addWidget(self.caja, stretch=1)
+        barra.addWidget(QLabel("Mostrar:"))
+        barra.addWidget(self.combo_cantidad)
         barra.addWidget(self.boton)
 
         layout = QVBoxLayout(self)
         layout.addLayout(barra)
+        layout.addWidget(self.pista)
         layout.addWidget(self.estado)
         layout.addWidget(self.lista, stretch=1)
 
@@ -62,7 +87,8 @@ class SearchView(QWidget):
             return
         self.estado.setText("Buscando… (la primera búsqueda carga los modelos)")
         self.boton.setEnabled(False)
-        self._worker = BusquedaWorker(query)
+        k = _OPCIONES_CANTIDAD[self.combo_cantidad.currentIndex()][1]
+        self._worker = BusquedaWorker(query, k)
         self._worker.resultados.connect(self._mostrar)
         self._worker.fallo.connect(self._error)
         self._worker.start()

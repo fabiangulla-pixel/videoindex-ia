@@ -35,6 +35,13 @@ def test_ollama_es_gratis():
     assert "$0" in est.resumen()
 
 
+def test_lmstudio_es_gratis():
+    est = costos.estimar_pregunta_rag("q", ["e" * 4000], "s", "lmstudio", "gemma-3-12b-it-qat")
+    assert est.es_local
+    assert est.costo_usd == 0.0
+    assert "$0" in est.resumen()
+
+
 def test_costo_real_usages_mixtos():
     usages = [
         {"prompt_tokens": 1000, "completion_tokens": 500},  # OpenAI dict

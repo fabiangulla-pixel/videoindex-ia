@@ -52,10 +52,11 @@ class EscaneoWorker(QThread):
     terminado = Signal(object)  # ResultadoIngesta
     fallo = Signal(str)
 
-    def __init__(self, carpeta: str, curso: str | None = None):
+    def __init__(self, carpeta: str, curso: str | None = None, project_id: str | None = None):
         super().__init__()
         self.carpeta = carpeta
         self.curso = curso
+        self.project_id = project_id
 
     def run(self):
         con = None
@@ -65,7 +66,7 @@ class EscaneoWorker(QThread):
 
             con = conectar(paths.DB_PATH)  # conexión propia de este hilo
             resultado = IngestService(con).escanear_carpeta(
-                self.carpeta, self.curso, self.progreso.emit
+                self.carpeta, self.curso, self.progreso.emit, self.project_id
             )
             self.terminado.emit(resultado)
         except Exception as exc:
@@ -131,7 +132,7 @@ class BusquedaWorker(QThread):
     resultados = Signal(list)  # list[SearchResult]
     fallo = Signal(str)
 
-    def __init__(self, query: str, k: int = 10):
+    def __init__(self, query: str, k: int = 100):
         super().__init__()
         self.query = query
         self.k = k
@@ -146,6 +147,36 @@ class BusquedaWorker(QThread):
             buscador = _crear_buscador(servicios, con)
             resultados = buscador.search(self.query, self.k)
             self.resultados.emit(resultados)
+        except Exception as exc:
+            self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
+
+
+class EliminarVideoWorker(QThread):
+    """Borra un video y todo lo derivado (transcripción, chunks, entidades,
+    embeddings/FAISS, anotaciones). El archivo en disco no se toca aquí —
+    borrarlo también, si el usuario lo pidió, lo hace la vista tras recibir
+    'terminado' (I/O de archivo simple, no necesita hilo aparte)."""
+
+    terminado = Signal(str)  # video_id
+    fallo = Signal(str)
+
+    def __init__(self, video_id: str):
+        super().__init__()
+        self.video_id = video_id
+
+    def run(self):
+        con = None
+        try:
+            from videoindex.application.video_deletion_service import VideoDeletionService
+            from videoindex.infrastructure.db.connection import conectar
+
+            servicios = ServiciosCache.obtener()
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            VideoDeletionService(con, servicios.embedder, servicios.faiss).eliminar(self.video_id)
+            self.terminado.emit(self.video_id)
         except Exception as exc:
             self.fallo.emit(str(exc))
         finally:

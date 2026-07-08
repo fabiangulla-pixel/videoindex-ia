@@ -161,11 +161,95 @@ class OllamaProvider:
         return datos.get("response", "")
 
 
+def modelos_instalados_ollama(host: str = "http://localhost:11434") -> list[str]:
+    """Consulta /api/tags: qué modelos tiene Ollama descargados AHORA (a
+    diferencia del resto de proveedores, aquí no hay catálogo fijo — depende
+    de qué haya bajado el usuario con 'ollama pull'; pedir un modelo que no
+    está instalado da 404, no un error de red). Lista vacía si el servidor
+    no responde (no está corriendo, o aún no se instaló ningún modelo)."""
+    import json
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{host}/api/tags", timeout=2) as resp:
+            datos = json.loads(resp.read())
+        return [m["name"] for m in datos.get("models", [])]
+    except Exception:
+        return []
+
+
+class LMStudioProvider:
+    """Modelo local vía LM Studio, costo $0. Requiere el servidor local
+    (Developer → Start Server en LM Studio, default localhost:1234) con
+    un modelo cargado. API compatible con OpenAI (/v1/chat/completions)."""
+
+    def __init__(self, modelo: str = "", host: str = "http://localhost:1234"):
+        self._modelo = modelo
+        self._host = host
+        self._usages: list = []
+
+    @property
+    def model_name(self) -> str:
+        return self._modelo
+
+    def usages(self) -> list:
+        return self._usages
+
+    def ask(self, system: str, user: str) -> str:
+        import json
+        import urllib.request
+
+        payload = json.dumps(
+            {
+                "model": self._modelo
+                or "local-model",  # LM Studio ignora esto si solo hay uno cargado
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "stream": False,
+            }
+        ).encode()
+        peticion = urllib.request.Request(
+            f"{self._host}/v1/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(peticion, timeout=300) as resp:
+            datos = json.loads(resp.read())
+        uso = datos.get("usage", {})
+        self._usages.append(
+            {
+                "prompt_tokens": uso.get("prompt_tokens", 0),
+                "completion_tokens": uso.get("completion_tokens", 0),
+            }
+        )
+        return datos["choices"][0]["message"]["content"] or ""
+
+
+def modelos_cargados_lmstudio(host: str = "http://localhost:1234") -> list[str]:
+    """Consulta /v1/models: qué modelos tiene LM Studio cargados AHORA MISMO
+    (a diferencia de los demás proveedores, aquí no hay un catálogo fijo que
+    listar — depende de lo que el usuario descargó y cargó en su máquina).
+    Lista vacía si el servidor no está corriendo (no es un error: el usuario
+    puede no haberlo iniciado todavía)."""
+    import json
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{host}/v1/models", timeout=2) as resp:
+            datos = json.loads(resp.read())
+        return [m["id"] for m in datos.get("data", [])]
+    except Exception:
+        return []
+
+
 PROVEEDORES = {
     "gemini": (GeminiProvider, "gemini-2.5-flash"),
     "openai": (OpenAIProvider, "gpt-5.4-mini"),
     "claude": (ClaudeProvider, "claude-opus-4-8"),
     "ollama": (OllamaProvider, "llama3.1"),
+    "lmstudio": (LMStudioProvider, ""),
 }
 
 

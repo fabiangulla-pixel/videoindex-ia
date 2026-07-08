@@ -114,6 +114,31 @@ def test_content_start_se_persiste_durante_el_pipeline(
     assert VideoRepo(con).por_id(v.video_id).content_start_s == 3.5
 
 
+def test_progreso_transcripcion_avanza_dentro_del_hueco_del_video(
+    con, tmp_path, fake_embedder, settings
+):
+    """Con 2 videos en el lote, el progreso de 'transcribing' del segundo
+    video debe reportarse en [0.5, 1.0], no clavado en 0.5 todo el tiempo
+    (antes del fix, la fracción del lote era fija por video: no había avance
+    real dentro de la transcripción de cada uno)."""
+    v1 = _alta_video(con, "C:/v/a.mp4", "ck-a")
+    v2 = _alta_video(con, "C:/v/b.mp4", "ck-b")
+    transcriptor = FakeTranscriptionProvider(
+        {**_segmentos_demo("C:/v/a.mp4"), **_segmentos_demo("C:/v/b.mp4")}
+    )
+    pipeline, _ = _pipeline(con, tmp_path, fake_embedder, transcriptor, settings)
+
+    reportes: list[tuple[str, str, float]] = []
+    pipeline.procesar_lote(
+        [v1, v2], progress=lambda vid, etapa, frac: reportes.append((vid, etapa, frac))
+    )
+
+    transcribiendo_v1 = [f for vid, e, f in reportes if vid == v1.video_id and e == "transcribing"]
+    transcribiendo_v2 = [f for vid, e, f in reportes if vid == v2.video_id and e == "transcribing"]
+    assert transcribiendo_v1 and all(0.0 <= f <= 0.5 for f in transcribiendo_v1)
+    assert transcribiendo_v2 and all(0.5 <= f <= 1.0 for f in transcribiendo_v2)
+
+
 def test_fallo_no_aborta_lote(con, tmp_path, fake_embedder, settings):
     v_mal = _alta_video(con, "C:/v/mal.mp4", "ck-mal")
     v_bien = _alta_video(con, "C:/v/bien.mp4", "ck-bien")

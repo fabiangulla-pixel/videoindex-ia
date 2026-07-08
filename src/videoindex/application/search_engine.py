@@ -45,7 +45,10 @@ class SearchEngine:
         query = query.strip()
         if not query:
             return []
-        n = self.cfg.candidatos_por_fuente
+        # candidatos_por_fuente es el techo de FAISS/FTS antes de fusionar;
+        # si el usuario pide más resultados que ese techo (p. ej. "Todos"),
+        # hay que subirlo también o se corta antes de llegar a fusionar.
+        n = max(self.cfg.candidatos_por_fuente, k)
 
         # Fuente semántica: FAISS sobre la versión de embeddings activa.
         semanticos: dict[str, float] = {}

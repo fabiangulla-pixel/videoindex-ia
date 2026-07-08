@@ -25,6 +25,15 @@ class Video:
     # transcript_segments/semantic_chunks, que siguen absolutos (ADR-002).
     # None = aún no detectado (video previo a esta feature, o pendiente).
     content_start_s: float | None = None
+    # None = "Sin proyecto" (videos de antes de esta feature, o sin asignar).
+    project_id: str | None = None
+
+
+@dataclass
+class Project:
+    project_id: str
+    name: str
+    created_at: str = ""
 
 
 @dataclass
