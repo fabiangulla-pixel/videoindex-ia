@@ -41,7 +41,11 @@ class SearchEngine:
         self.faiss = faiss_index
         self.cfg = settings or SearchSettings()
 
-    def search(self, query: str, k: int = 10) -> list[SearchResult]:
+    def search(
+        self, query: str, k: int = 10, project_id: str | None = "__todos__"
+    ) -> list[SearchResult]:
+        """project_id: mismo sentinel que VideoRepo.listar — cada proyecto es
+        un corpus aparte ("__todos__" busca en toda la biblioteca)."""
         query = query.strip()
         if not query:
             return []
@@ -49,20 +53,33 @@ class SearchEngine:
         # si el usuario pide más resultados que ese techo (p. ej. "Todos"),
         # hay que subirlo también o se corta antes de llegar a fusionar.
         n = max(self.cfg.candidatos_por_fuente, k)
+        filtrar = project_id != "__todos__"
 
         # Fuente semántica: FAISS sobre la versión de embeddings activa.
+        # FAISS no conoce proyectos: cuando hay filtro se sobre-pide (x3) y
+        # se descartan después los chunks de otros proyectos, para no quedar
+        # con menos candidatos útiles que n.
         semanticos: dict[str, float] = {}
         row = self.con.execute(
             "SELECT version_id FROM embedding_versions WHERE is_active = 1"
         ).fetchone()
         if row:
             vector = self.embedder.encode([query])[0]
-            hits = self.faiss.search(vector, n)
+            hits = self.faiss.search(vector, n * 3 if filtrar else n)
             mapa = self.emb_repo.chunk_por_faiss_id(row["version_id"], [h[0] for h in hits])
             semanticos = {mapa[fid]: sim for fid, sim in hits if fid in mapa}
+            if filtrar and semanticos:
+                proyectos = self.chunks.proyectos_de_chunks(list(semanticos))
+                semanticos = {
+                    cid: sim for cid, sim in semanticos.items() if proyectos.get(cid) == project_id
+                }
+                if len(semanticos) > n:
+                    semanticos = dict(
+                        sorted(semanticos.items(), key=lambda kv: kv[1], reverse=True)[:n]
+                    )
 
-        # Fuente textual: FTS5/BM25.
-        textuales = self.chunks.buscar_fts(query, n)
+        # Fuente textual: FTS5/BM25 (el filtro va en el SQL directamente).
+        textuales = self.chunks.buscar_fts(query, n, project_id)
 
         candidatos = list(set(semanticos) | set(textuales))
         if not candidatos:
@@ -108,7 +125,9 @@ class SearchEngine:
             )
         return resultados
 
-    def evidencias(self, query: str, k: int, umbral: float) -> list[Evidence]:
+    def evidencias(
+        self, query: str, k: int, umbral: float, project_id: str | None = "__todos__"
+    ) -> list[Evidence]:
         """Para el RAG: solo resultados sobre el umbral, como Evidence."""
         return [
             Evidence(
@@ -119,7 +138,7 @@ class SearchEngine:
                 end_time=r.end_time,
                 text=self._texto_completo(r.chunk_id),
             )
-            for r in self.search(query, k)
+            for r in self.search(query, k, project_id)
             if r.score >= umbral
         ]
 

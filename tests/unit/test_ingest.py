@@ -53,3 +53,36 @@ def test_escanear_carpeta_sin_project_id_deja_video_sin_proyecto(con, tmp_path):
     _crear_video(tmp_path, "a.mp4")
     resultado = IngestService(con).escanear_carpeta(tmp_path)
     assert resultado.nuevos[0].project_id is None
+
+
+def test_reescanear_adopta_videos_huerfanos_al_proyecto(con, tmp_path):
+    """Caso real: mismos archivos (mismo checksum) copiados a otro disco y
+    re-escaneados dentro de un proyecto nuevo — antes quedaban con
+    project_id NULL e invisibles bajo el filtro del proyecto."""
+    from videoindex.infrastructure.db.repositories import ProjectRepo, VideoRepo
+
+    _crear_video(tmp_path, "a.mp4", b"mismo contenido")
+    IngestService(con).escanear_carpeta(tmp_path)  # primer escaneo, sin proyecto
+
+    proyecto = ProjectRepo(con).crear("Prueba SSD")
+    r2 = IngestService(con).escanear_carpeta(tmp_path, project_id=proyecto.project_id)
+
+    assert len(r2.nuevos) == 0  # sigue siendo el mismo video (checksum)
+    video = r2.pendientes_previos[0]
+    assert video.project_id == proyecto.project_id
+    assert VideoRepo(con).por_id(video.video_id).project_id == proyecto.project_id
+
+
+def test_reescanear_no_roba_videos_de_otro_proyecto(con, tmp_path):
+    from videoindex.infrastructure.db.repositories import ProjectRepo, VideoRepo
+
+    prepo = ProjectRepo(con)
+    proyecto_a = prepo.crear("Proyecto A")
+    proyecto_b = prepo.crear("Proyecto B")
+    _crear_video(tmp_path, "a.mp4", b"mismo contenido")
+    IngestService(con).escanear_carpeta(tmp_path, project_id=proyecto_a.project_id)
+
+    r2 = IngestService(con).escanear_carpeta(tmp_path, project_id=proyecto_b.project_id)
+
+    video = r2.pendientes_previos[0]
+    assert VideoRepo(con).por_id(video.video_id).project_id == proyecto_a.project_id

@@ -76,6 +76,14 @@ class SearchView(QWidget):
         self.caja.returnPressed.connect(self._buscar)
         self.lista.itemClicked.connect(self._abrir)
         self._worker = None
+        # Cada proyecto es un corpus aparte: mismo sentinel que
+        # VideoRepo.listar ("__todos__" = toda la biblioteca). Lo setea
+        # MainWindow al cambiar el selector de proyecto.
+        self.proyecto_activo: str | None = "__todos__"
+
+    def filtrar_por_proyecto(self, project_id: str | None) -> None:
+        """Conectado a ProjectSelector.proyecto_cambiado."""
+        self.proyecto_activo = project_id
 
     def _buscar(self):
         # guardia anti-doble-disparo: returnPressed sigue activo aunque el
@@ -88,7 +96,7 @@ class SearchView(QWidget):
         self.estado.setText("Buscando… (la primera búsqueda carga los modelos)")
         self.boton.setEnabled(False)
         k = _OPCIONES_CANTIDAD[self.combo_cantidad.currentIndex()][1]
-        self._worker = BusquedaWorker(query, k)
+        self._worker = BusquedaWorker(query, k, self.proyecto_activo)
         self._worker.resultados.connect(self._mostrar)
         self._worker.fallo.connect(self._error)
         self._worker.start()

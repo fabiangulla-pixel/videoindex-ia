@@ -105,3 +105,28 @@ def test_eliminar_video_sin_chunks_no_toca_faiss(con, tmp_path):
     VideoDeletionService(con, embedder, faiss).eliminar(video_id)
 
     assert VideoRepo(con).por_id(video_id) is None
+
+
+def test_eliminar_pendiente_sin_modelos_cargados(con):
+    """Borrado ligero (usado por TrimWorker): un video sin chunks se puede
+    eliminar con embedder/faiss None, sin cargar el modelo de embeddings."""
+    video_id = str(uuid4())
+    VideoRepo(con).guardar(_video(video_id))
+
+    VideoDeletionService(con, None, None).eliminar(video_id)
+
+    assert VideoRepo(con).por_id(video_id) is None
+
+
+def test_eliminar_con_chunks_sin_modelos_lanza_error_claro(con, tmp_path):
+    """Si el video SÍ tiene chunks indexados, el borrado ligero debe negarse
+    en vez de dejar el índice FAISS con vectores huérfanos."""
+    import pytest
+
+    embedder = FakeEmbeddingProvider()
+    faiss = FaissIndex(tmp_path / "v1.faiss", embedder.dimensions)
+    video_id = str(uuid4())
+    _armar_video_completo(con, faiss, embedder, video_id)
+
+    with pytest.raises(RuntimeError, match="chunks indexados"):
+        VideoDeletionService(con, None, None).eliminar(video_id)

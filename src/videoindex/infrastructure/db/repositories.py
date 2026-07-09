@@ -235,8 +235,14 @@ class ChunkRepo:
             chunk_ids,
         ).fetchall()
 
-    def buscar_fts(self, query: str, k: int) -> dict[str, float]:
+    def buscar_fts(
+        self, query: str, k: int, project_id: str | None = "__todos__"
+    ) -> dict[str, float]:
         """chunk_id -> bm25 crudo (negativo, menor = mejor). Query saneada.
+
+        project_id: mismo sentinel que VideoRepo.listar — "__todos__" no
+        filtra, None filtra por videos sin proyecto, otro string filtra por
+        ese proyecto (cada proyecto es un corpus aparte para la búsqueda).
 
         Cada término va entre comillas dobles para tratarlo como frase literal
         (evita que operadores de FTS5 como NOT/NEAR/* rompan la consulta).
@@ -249,13 +255,36 @@ class ChunkRepo:
         if not terminos:
             return {}
         fts_query = " OR ".join(f'"{t.replace(chr(34), chr(34) * 2)}"' for t in terminos)
-        rows = self.con.execute(
-            """SELECT c.chunk_id, bm25(chunks_fts) AS score
-               FROM chunks_fts f JOIN semantic_chunks c ON c.rowid = f.rowid
-               WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?""",
-            (fts_query, k),
-        ).fetchall()
+        sql = """SELECT c.chunk_id, bm25(chunks_fts) AS score
+                 FROM chunks_fts f
+                 JOIN semantic_chunks c ON c.rowid = f.rowid
+                 JOIN videos v USING (video_id)
+                 WHERE chunks_fts MATCH ?"""
+        params: list = [fts_query]
+        if project_id is None:
+            sql += " AND v.project_id IS NULL"
+        elif project_id != "__todos__":
+            sql += " AND v.project_id = ?"
+            params.append(project_id)
+        sql += " ORDER BY score LIMIT ?"
+        params.append(k)
+        rows = self.con.execute(sql, params).fetchall()
         return {r["chunk_id"]: r["score"] for r in rows}
+
+    def proyectos_de_chunks(self, chunk_ids: list[str]) -> dict[str, str | None]:
+        """chunk_id -> project_id de su video (None = sin proyecto) — para
+        filtrar por proyecto los candidatos que vienen de FAISS, que no
+        conoce la BD."""
+        if not chunk_ids:
+            return {}
+        marcas = ",".join("?" * len(chunk_ids))
+        rows = self.con.execute(
+            f"""SELECT c.chunk_id, v.project_id
+                FROM semantic_chunks c JOIN videos v USING (video_id)
+                WHERE c.chunk_id IN ({marcas})""",
+            chunk_ids,
+        ).fetchall()
+        return {r["chunk_id"]: r["project_id"] for r in rows}
 
     def confianzas(self, chunk_ids: list[str]) -> dict[str, float]:
         if not chunk_ids:

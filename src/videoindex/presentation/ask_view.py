@@ -29,9 +29,10 @@ class EvidenciasWorker(QThread):
     listo = Signal(str, list)  # query, evidencias
     fallo = Signal(str)
 
-    def __init__(self, query: str):
+    def __init__(self, query: str, project_id: str | None = "__todos__"):
         super().__init__()
         self.query = query
+        self.project_id = project_id
 
     def run(self):
         con = None
@@ -41,7 +42,7 @@ class EvidenciasWorker(QThread):
             servicios = ServiciosCache.obtener()
             con = conectar(paths.DB_PATH)  # conexión propia de este hilo
             rag = RAGService(_crear_buscador(servicios, con), SETTINGS.rag)
-            evidencias = rag.recuperar_evidencias(self.query)
+            evidencias = rag.recuperar_evidencias(self.query, self.project_id)
             self.listo.emit(self.query, evidencias)
         except Exception as exc:
             self.fallo.emit(str(exc))
@@ -125,6 +126,14 @@ class AskView(QWidget):
         self.caja.returnPressed.connect(self._preguntar)
         self.fuentes.itemClicked.connect(self._abrir_fuente)
         self._worker = None
+        # Cada proyecto es un corpus aparte: el RAG solo ve evidencia del
+        # proyecto activo ("__todos__" = toda la biblioteca). Lo setea
+        # MainWindow al cambiar el selector de proyecto.
+        self.proyecto_activo: str | None = "__todos__"
+
+    def filtrar_por_proyecto(self, project_id: str | None) -> None:
+        """Conectado a ProjectSelector.proyecto_cambiado."""
+        self.proyecto_activo = project_id
 
     def _modelos_del_proveedor(self, proveedor: str):
         self.combo_modelo.clear()
@@ -170,7 +179,7 @@ class AskView(QWidget):
             return
         self.boton.setEnabled(False)  # guardia anti-doble-clic
         self.estado.setText("Buscando evidencia en tu biblioteca…")
-        self._worker = EvidenciasWorker(query)
+        self._worker = EvidenciasWorker(query, self.proyecto_activo)
         self._worker.listo.connect(self._confirmar_costo)
         self._worker.fallo.connect(self._error)
         self._worker.start()

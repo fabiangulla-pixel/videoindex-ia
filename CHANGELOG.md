@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-07-08 — Reproductor confiable, recorte de video, corpus por proyecto y export JSON
+
+Sesión guiada por la prueba real del usuario con la carpeta "Agentes de IA
+para abogadxs" (proyecto "Prueba SSD-P", archivos copiados a un SSD nuevo).
+
+- **Reproductor**: fix de fondo — el salto al timestamp se disparaba con un
+  timer fijo de 300 ms sin esperar a que el video cargara; en esta máquina
+  (sin GPU, archivos de 600 MB-1 GB) el seek se perdía y había que darle
+  Play a mano. Ahora escucha `mediaStatusChanged` y reproduce+salta cuando
+  el video está realmente listo ("⏳ Cargando…" mientras tanto). Controles
+  nuevos: ⏪/⏩ 10 s, volumen con mute (no existía), velocidad 0.75x–2x.
+- **✂ Recorte antes de transcribir** (`infrastructure/media/trimmer.py` +
+  `TrimDialog` + `TrimWorker`): remux PyAV sin re-codificar (una grabación
+  de 2 h se recorta en segundos aun sin GPU; corte en el keyframe más
+  cercano). El original en disco NUNCA se toca: el recorte es archivo nuevo
+  que reemplaza al original en la biblioteca (hereda proyecto/curso). Menú
+  contextual, solo pending/failed. El detector de negro inicial pre-llena
+  la marca de inicio.
+- **Fix crítico de proyectos**: re-escanear archivos ya conocidos (mismo
+  checksum, p. ej. copiados a otro disco) bajo un proyecto NO los asignaba
+  → tabla vacía bajo el filtro del proyecto nuevo. Ahora el escaneo adopta
+  al proyecto activo los videos huérfanos (sin robar los de otro proyecto).
+- **Corpus por proyecto**: Buscar y Preguntar respetan el selector de
+  proyecto — cada proyecto es un corpus aparte (FTS filtra en SQL; FAISS
+  sobre-pide x3 y descarta otros proyectos). "Todos los proyectos" mantiene
+  el comportamiento anterior.
+- **📦 Export de corpus a JSON** (`application/export_service.py`): un JSON
+  por video (metadatos + chunks con timestamps/entidades + anotaciones
+  manuales), por video (menú contextual) o por proyecto completo (botón en
+  Biblioteca). UTF-8 sin escapar, listo para otro RAG/GPT.
+- También: `VideoDeletionService` acepta embedder/faiss None para borrado
+  ligero de pendientes sin cargar modelos.
+
+118 tests rápidos + 4 slow nuevos del trimmer (mp4 sintéticos reales),
+ruff limpio, smoke GUI OK.
+
+## 2026-07-07 (cierre de sesión) — Verificación del Dossier + commit de features pendientes
+
+Sesión de retomada desde TarotCultural (se evaluó si VideoIndex IA sirve
+para extraer el contenido de clases en video — sí, y de hecho ya reutiliza
+`transcribir.py` de ese proyecto). Al revisar el repo, se encontró que el
+Dossier del video (ver entrada de abajo) ya estaba implementado, más otros
+9 archivos con trabajo sin commitear encima:
+
+- **Proyectos**: tabla `projects` (migración v4), `Video.project_id`,
+  agrupador real de videos en la Biblioteca (antes solo `course_name`
+  como texto libre sin uso en la GUI).
+- **Eliminación de video**: `application/video_deletion_service.py` +
+  `EliminarVideoWorker` — borra transcripción/chunks/entidades/embeddings
+  FAISS/anotaciones de un video.
+- **LM Studio como proveedor local** ($0): `LMStudioProvider` en
+  `infrastructure/llm/providers.py`, API compatible OpenAI
+  (`/v1/chat/completions`), catálogo de modelos consultado en vivo vía
+  `/v1/models` (no hay lista fija: depende de lo que el usuario cargó).
+- **Progreso granular de transcripción**: `TranscriptionProvider.transcribir()`
+  gana un callback `progreso(fraccion)` opcional.
+
+Verificado todo antes de commitear: 97→103 tests verdes (unit+integration),
+ruff limpio. Commit `744fd6e`.
+
+### Prueba E2E del Dossier (parcial)
+
+La biblioteca ya tiene 12 videos reales procesados (grabaciones Zoom
+`GMT2026...` + `S1`/`S2`). Se ejecutó la fase 1 del Dossier
+(`recopilar_evidencia_por_entidad`, sin costo) sobre "S1" real: 172
+chunks, 143 entidades, estimación agregada correcta ($0.548 USD). La
+fase 2 (llamada real al LLM) quedó **bloqueada por falta de API key** —
+no hay ninguna guardada en Credential Manager ni en variables de entorno.
+Pendiente: configurar una key (Gemini, ya es el default) y completar la
+prueba con una llamada real acotada (2-3 entidades, ~$0.01 USD).
+
+Nota: "S1"/"S2" no son las clases de tarot cultural (entidades como
+"Home Center", "John McCarty" sugieren otro curso) — la ruta de esos
+videos aún no se ha identificado.
+
 ## 2026-07-07 — Dossier del video
 
 **Feature nueva** pedida por el usuario: dado un video ya transcrito e

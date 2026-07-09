@@ -24,13 +24,15 @@ if TYPE_CHECKING:
 
 class VideoDeletionService:
     """embedder/faiss_index: los mismos ya cacheados en ServiciosCache
-    (instanciarlos de nuevo aquí recargaría el modelo de embeddings)."""
+    (instanciarlos de nuevo aquí recargaría el modelo de embeddings).
+    Pueden ser None SOLO si el video no tiene chunks indexados (pending/
+    failed temprano): permite el borrado ligero sin cargar modelos."""
 
     def __init__(
         self,
         con: sqlite3.Connection,
-        embedder: LocalEmbeddingProvider,
-        faiss_index: FaissIndex,
+        embedder: LocalEmbeddingProvider | None,
+        faiss_index: FaissIndex | None,
     ):
         self.con = con
         self.videos = VideoRepo(con)
@@ -52,6 +54,11 @@ class VideoDeletionService:
 
         chunk_ids = [c.chunk_id for c in self.chunks.por_video(video_id)]
         if chunk_ids:
+            if self.embedder is None or self.faiss_index is None:
+                raise RuntimeError(
+                    "El video tiene chunks indexados: eliminarlo requiere embedder y "
+                    "faiss_index (usa los de ServiciosCache)."
+                )
             version_id = self.embeddings.version_activa(
                 self.embedder.model_name, self.embedder.dimensions, str(self.faiss_index.ruta)
             )

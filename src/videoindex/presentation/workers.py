@@ -132,10 +132,11 @@ class BusquedaWorker(QThread):
     resultados = Signal(list)  # list[SearchResult]
     fallo = Signal(str)
 
-    def __init__(self, query: str, k: int = 100):
+    def __init__(self, query: str, k: int = 100, project_id: str | None = "__todos__"):
         super().__init__()
         self.query = query
         self.k = k
+        self.project_id = project_id
 
     def run(self):
         con = None
@@ -145,7 +146,7 @@ class BusquedaWorker(QThread):
             servicios = ServiciosCache.obtener()
             con = conectar(paths.DB_PATH)  # conexión propia de este hilo
             buscador = _crear_buscador(servicios, con)
-            resultados = buscador.search(self.query, self.k)
+            resultados = buscador.search(self.query, self.k, self.project_id)
             self.resultados.emit(resultados)
         except Exception as exc:
             self.fallo.emit(str(exc))
@@ -177,6 +178,79 @@ class EliminarVideoWorker(QThread):
             con = conectar(paths.DB_PATH)  # conexión propia de este hilo
             VideoDeletionService(con, servicios.embedder, servicios.faiss).eliminar(self.video_id)
             self.terminado.emit(self.video_id)
+        except Exception as exc:
+            self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
+
+
+class DetectarInicioWorker(QThread):
+    """Detecta el primer frame no-negro para pre-llenar la marca de inicio
+    del diálogo de recorte. Solo lee frames del inicio del archivo (rápido)
+    y detectar_inicio_contenido nunca lanza: 0.0 = sin sugerencia."""
+
+    listo = Signal(float)  # offset_s (0.0 = sin negro inicial detectado)
+
+    def __init__(self, ruta_video: str):
+        super().__init__()
+        self.ruta_video = ruta_video
+
+    def run(self):
+        from videoindex.infrastructure.media.probe import detectar_inicio_contenido
+
+        self.listo.emit(detectar_inicio_contenido(self.ruta_video))
+
+
+class TrimWorker(QThread):
+    """Recorta un video (remux sin re-codificar, archivo NUEVO) y lo
+    reemplaza en la biblioteca: alta del recortado con el proyecto/curso del
+    original + baja del original (su archivo en disco no se toca).
+
+    El borrado del original es ligero (pending/failed no tienen embeddings):
+    solo carga ServiciosCache si el video sí llegó a indexar chunks."""
+
+    progreso = Signal(float)  # fraccion 0..1 del remux
+    terminado = Signal(str)  # titulo del video recortado
+    fallo = Signal(str)
+
+    def __init__(self, video_id: str, ruta_original: str, inicio_s: float, fin_s: float | None):
+        super().__init__()
+        self.video_id = video_id
+        self.ruta_original = ruta_original
+        self.inicio_s = inicio_s
+        self.fin_s = fin_s
+
+    def run(self):
+        con = None
+        try:
+            from videoindex.application.trim_service import (
+                generar_ruta_recorte,
+                registrar_recorte,
+            )
+            from videoindex.application.video_deletion_service import VideoDeletionService
+            from videoindex.infrastructure.db.connection import conectar
+            from videoindex.infrastructure.db.repositories import ChunkRepo, VideoRepo
+            from videoindex.infrastructure.media.trimmer import recortar_video
+
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            original = VideoRepo(con).por_id(self.video_id)
+            if original is None:
+                raise ValueError("El video ya no está en la biblioteca.")
+
+            destino = generar_ruta_recorte(self.ruta_original)
+            recortar_video(
+                self.ruta_original, destino, self.inicio_s, self.fin_s, self.progreso.emit
+            )
+
+            nuevo = registrar_recorte(con, original, destino)
+            if ChunkRepo(con).por_video(self.video_id):
+                servicios = ServiciosCache.obtener()
+                deletion = VideoDeletionService(con, servicios.embedder, servicios.faiss)
+            else:
+                deletion = VideoDeletionService(con, None, None)
+            deletion.eliminar(self.video_id)
+            self.terminado.emit(nuevo.title)
         except Exception as exc:
             self.fallo.emit(str(exc))
         finally:

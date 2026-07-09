@@ -55,8 +55,12 @@ class MainWindow(QMainWindow):
         self.busqueda.abrir_video.connect(self.player.abrir_en)
         self.biblioteca.abrir_video.connect(self.player.abrir_en)
         self.selector_proyecto.proyecto_cambiado.connect(self.biblioteca.filtrar_por_proyecto)
+        self.selector_proyecto.proyecto_cambiado.connect(self.busqueda.filtrar_por_proyecto)
         self.selector_proyecto.proyecto_cambiado.connect(self._actualizar_proyecto_ingesta)
         self.biblioteca.proyecto_para_ingesta = self.selector_proyecto.proyecto_para_asignar()
+        # Último proyecto emitido por el selector (sentinel de VideoRepo.listar);
+        # sirve para sincronizar la pestaña Preguntar, que se acopla después.
+        self._proyecto_activo: str | None = "__todos__"
         self.preguntar = None
 
         menu = self.menuBar().addMenu("&Configuración")
@@ -95,7 +99,8 @@ class MainWindow(QMainWindow):
         ):
             self.biblioteca.continuar_procesando()
 
-    def _actualizar_proyecto_ingesta(self, _dato) -> None:
+    def _actualizar_proyecto_ingesta(self, dato) -> None:
+        self._proyecto_activo = dato
         self.biblioteca.proyecto_para_ingesta = self.selector_proyecto.proyecto_para_asignar()
 
     def _abrir_configuracion(self) -> None:
@@ -109,6 +114,10 @@ class MainWindow(QMainWindow):
         """La pestaña Preguntar se acopla cuando el RAG está configurado (E5)."""
         self.preguntar = widget
         self.tabs.addTab(widget, "💬 Preguntar")
+        # Se acopla DESPUÉS del wiring del __init__: conectar y sincronizar
+        # el proyecto activo aquí, o Preguntar ignoraría el filtro actual.
+        self.selector_proyecto.proyecto_cambiado.connect(widget.filtrar_por_proyecto)
+        widget.proyecto_activo = self._proyecto_activo
 
     def closeEvent(self, event) -> None:
         """Espera a que terminen los QThread en curso antes de cerrar: destruir

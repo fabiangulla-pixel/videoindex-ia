@@ -63,3 +63,48 @@ def test_search_k_menor_respeta_el_limite(con, tmp_path, fake_embedder):
     buscador = SearchEngine(con, fake_embedder, FakeNERProvider(), faiss, SearchSettings())
     resultados = buscador.search("palabra clave", k=3)
     assert len(resultados) == 3
+
+
+def test_search_filtra_por_proyecto(con, tmp_path, fake_embedder):
+    """Cada proyecto es un corpus aparte: buscar en el proyecto A no debe
+    devolver chunks de videos del proyecto B ni de videos sin proyecto."""
+    from videoindex.infrastructure.db.repositories import ProjectRepo
+
+    proyecto_a = ProjectRepo(con).crear("Agentes IA")
+    proyecto_b = ProjectRepo(con).crear("Tarot")
+    v_a, v_b, v_sin = str(uuid4()), str(uuid4()), str(uuid4())
+    VideoRepo(con).guardar(
+        Video(
+            video_id=v_a,
+            title="a",
+            path="C:/a.mp4",
+            checksum="ck-a",
+            project_id=proyecto_a.project_id,
+        )
+    )
+    VideoRepo(con).guardar(
+        Video(
+            video_id=v_b,
+            title="b",
+            path="C:/b.mp4",
+            checksum="ck-b",
+            project_id=proyecto_b.project_id,
+        )
+    )
+    VideoRepo(con).guardar(Video(video_id=v_sin, title="s", path="C:/s.mp4", checksum="ck-s"))
+
+    faiss = FaissIndex(tmp_path / "v1.faiss", fake_embedder.dimensions)
+    _indexar_chunks(con, faiss, fake_embedder, v_a, ["agentes procesan la palabra clave"])
+    _indexar_chunks(con, faiss, fake_embedder, v_b, ["el tarot usa la palabra clave"])
+    _indexar_chunks(con, faiss, fake_embedder, v_sin, ["texto suelto con la palabra clave"])
+
+    buscador = SearchEngine(con, fake_embedder, FakeNERProvider(), faiss, SearchSettings())
+
+    solo_a = buscador.search("palabra clave", k=10, project_id=proyecto_a.project_id)
+    assert solo_a and all(r.video_id == v_a for r in solo_a)
+
+    sin_proyecto = buscador.search("palabra clave", k=10, project_id=None)
+    assert sin_proyecto and all(r.video_id == v_sin for r in sin_proyecto)
+
+    todos = buscador.search("palabra clave", k=10)  # default "__todos__"
+    assert {r.video_id for r in todos} == {v_a, v_b, v_sin}

@@ -64,6 +64,14 @@ class IngestService:
                 if str(archivo) != existente.path:
                     existente.path = str(archivo)
                     self.videos.guardar(existente)
+                # Un video ya conocido pero SIN proyecto se adopta al proyecto
+                # bajo el que se está escaneando (caso real: mismos archivos
+                # copiados a otro disco, re-escaneados dentro de un proyecto
+                # nuevo — sin esto quedaban invisibles bajo el filtro del
+                # proyecto). Si ya pertenece a OTRO proyecto, se respeta.
+                if project_id is not None and existente.project_id is None:
+                    existente.project_id = project_id
+                    self.videos.asignar_proyecto(existente.video_id, project_id)
                 if existente.processing_status == "completed":
                     resultado.ya_completados.append(existente)
                 else:

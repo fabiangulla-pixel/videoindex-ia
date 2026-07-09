@@ -27,6 +27,7 @@ from videoindex.presentation.workers import (
     EliminarVideoWorker,
     EscaneoWorker,
     PipelineWorker,
+    TrimWorker,
 )
 
 _ETIQUETAS_ESTADO = {
@@ -49,6 +50,11 @@ class LibraryView(QWidget):
         self.boton_agregar = QPushButton("📂 Agregar carpeta…")
         self.boton_continuar = QPushButton("▶ Continuar procesando")
         self.boton_continuar.setVisible(False)  # solo si hay pendientes (ver refrescar())
+        self.boton_exportar = QPushButton("📦 Exportar corpus…")
+        self.boton_exportar.setToolTip(
+            "Exporta un JSON por video completado de la vista actual "
+            "(chunks con timestamps, entidades y anotaciones)"
+        )
         self.progreso = QProgressBar()
         self.progreso.setVisible(False)
         self.etiqueta_estado = QLabel("")
@@ -72,6 +78,7 @@ class LibraryView(QWidget):
         barra = QHBoxLayout()
         barra.addWidget(self.boton_agregar)
         barra.addWidget(self.boton_continuar)
+        barra.addWidget(self.boton_exportar)
         barra.addWidget(self.etiqueta_estado, stretch=1)
 
         layout = QVBoxLayout(self)
@@ -83,6 +90,7 @@ class LibraryView(QWidget):
 
         self.boton_agregar.clicked.connect(self._agregar_carpeta)
         self.boton_continuar.clicked.connect(self.continuar_procesando)
+        self.boton_exportar.clicked.connect(self._exportar_corpus_proyecto)
         self._worker = None
         self._worker_dossier = None  # flujo independiente de la ingesta
         self._worker_eliminar = None  # flujo independiente de la ingesta
@@ -167,6 +175,14 @@ class LibraryView(QWidget):
         accion_dossier = menu.addAction("📄 Generar dossier del video…")
         # Sin chunks (video no completado) no hay nada que agrupar por entidad.
         accion_dossier.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
+        accion_recortar = menu.addAction("✂ Recortar antes de transcribir…")
+        # Recortar un video ya transcrito invalidaría sus timestamps: el
+        # recorte es para ANTES de pagar el tiempo de transcripción.
+        accion_recortar.setEnabled(
+            estado_item.text() in (_ETIQUETAS_ESTADO["pending"], _ETIQUETAS_ESTADO["failed"])
+        )
+        accion_exportar = menu.addAction("📦 Exportar corpus JSON…")
+        accion_exportar.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
         menu.addSeparator()
         accion_desasignar = menu.addAction("📤 Quitar del proyecto")
         accion_desasignar.setEnabled(tiene_proyecto)
@@ -174,10 +190,91 @@ class LibraryView(QWidget):
         elegida = menu.exec(self.tabla.viewport().mapToGlobal(pos))
         if elegida == accion_dossier:
             self._iniciar_dossier(video_id, item_titulo.text())
+        elif elegida == accion_recortar:
+            self._recortar_video(video_id, _ruta, item_titulo.text())
+        elif elegida == accion_exportar:
+            self._exportar_corpus_video(video_id, item_titulo.text())
         elif elegida == accion_desasignar:
             self._desasignar_proyecto(video_id)
         elif elegida == accion_eliminar:
             self._confirmar_eliminar(video_id, item_titulo.text())
+
+    def _exportar_corpus_video(self, video_id: str, titulo: str) -> None:
+        from videoindex.application.export_service import exportar_video_json
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
+
+        destino, _ = QFileDialog.getSaveFileName(
+            self, "Exportar corpus del video", f"{titulo}.json", "JSON (*.json)"
+        )
+        if not destino:
+            return
+        con = conectar(paths.DB_PATH)
+        try:
+            ruta = exportar_video_json(con, video_id, destino)
+        except Exception as exc:
+            self._error(str(exc))
+            return
+        finally:
+            con.close()
+        self._registrar(f"Corpus exportado: {ruta}")
+        self.etiqueta_estado.setText(f"Corpus exportado a {ruta}")
+
+    def _exportar_corpus_proyecto(self) -> None:
+        from videoindex.application.export_service import exportar_proyecto_json
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
+
+        carpeta = QFileDialog.getExistingDirectory(self, "Carpeta destino del corpus")
+        if not carpeta:
+            return
+        con = conectar(paths.DB_PATH)
+        try:
+            escritos = exportar_proyecto_json(con, self._proyecto_activo, carpeta)
+        except Exception as exc:
+            self._error(str(exc))
+            return
+        finally:
+            con.close()
+        if not escritos:
+            QMessageBox.information(
+                self,
+                "Exportar corpus",
+                "No hay videos completados en la vista actual: nada que exportar.",
+            )
+            return
+        self._registrar(f"Corpus del proyecto exportado: {len(escritos)} JSON en {carpeta}")
+        self.etiqueta_estado.setText(f"Corpus exportado: {len(escritos)} archivo(s) en {carpeta}")
+
+    def _recortar_video(self, video_id: str, ruta: str, titulo: str) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            QMessageBox.information(self, "Recortar", "Espera a que termine el proceso en curso.")
+            return
+        from videoindex.presentation.trim_dialog import TrimDialog
+
+        dialogo = TrimDialog(ruta, titulo, self)
+        if dialogo.exec() != TrimDialog.DialogCode.Accepted:
+            return
+        inicio_s, fin_s = dialogo.rango_seleccionado()
+
+        self.etiqueta_estado.setText(f'Recortando "{titulo}"…')
+        self._registrar(f'Recortando "{titulo}" ({inicio_s:.0f}s → {fin_s or "final"})')
+        self.progreso.setVisible(True)
+        self.progreso.setRange(0, 100)
+        self._worker = TrimWorker(video_id, ruta, inicio_s, fin_s)
+        self._worker.progreso.connect(lambda f: self.progreso.setValue(int(f * 100)))
+        self._worker.terminado.connect(self._on_recortado)
+        self._worker.fallo.connect(self._error)
+        self._worker.start()
+
+    def _on_recortado(self, titulo_nuevo: str) -> None:
+        self.progreso.setVisible(False)
+        self.etiqueta_estado.setText(f'Recorte listo: "{titulo_nuevo}" reemplazó al original.')
+        self._registrar(
+            f'Recorte listo: "{titulo_nuevo}" entró a la biblioteca (pendiente de '
+            "transcribir); el original salió de la lista, su archivo en disco no se tocó."
+        )
+        self.refrescar()
 
     def _desasignar_proyecto(self, video_id: str) -> None:
         from videoindex.config import paths

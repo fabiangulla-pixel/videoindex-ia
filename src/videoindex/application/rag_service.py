@@ -57,8 +57,12 @@ class RAGService:
         self.search = search_engine
         self.cfg = cfg or RAGSettings()
 
-    def recuperar_evidencias(self, query: str) -> list[Evidence]:
-        return self.search.evidencias(query, self.cfg.k_evidencias, self.cfg.umbral_evidencia)
+    def recuperar_evidencias(
+        self, query: str, project_id: str | None = "__todos__"
+    ) -> list[Evidence]:
+        return self.search.evidencias(
+            query, self.cfg.k_evidencias, self.cfg.umbral_evidencia, project_id
+        )
 
     def estimar(
         self, query: str, evidencias: list[Evidence], proveedor: str, modelo: str
