@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-07-13 — Exportación como bundle OKF (Open Knowledge Format)
+
+Sesión disparada por una pregunta del usuario sobre un estándar nuevo que
+Google Cloud anunció el 12-jun-2026 (OKF): empaquetar conocimiento como un
+directorio de archivos Markdown con frontmatter YAML, para que cualquier
+agente de IA lo lea sin depender de una base de datos ni SDK propietario.
+Verificado con la spec real en GitHub antes de implementar (no se asumió
+nada): OKF deja embeddings/búsqueda/indexación fuera de su alcance a
+propósito — es una capa de **portabilidad**, no reemplaza a `SearchEngine`
+(FAISS+FTS5+entidades+confianza, que sigue siendo la única puerta al
+conocimiento, ADR-003).
+
+- **`application/okf_export_service.py`** (nuevo): `exportar_video_okf` y
+  `exportar_proyecto_okf` generan un bundle (`index.md` + `videos/*.md` +
+  `entities/*.md`) a partir de lo que ya hay en SQLite — mismo espíritu $0
+  y mismo alcance que `export_service.py` (JSON), sin llamadas a LLM.
+  Entidades repetidas entre varios videos de un proyecto se funden en UN
+  solo archivo con todas sus apariciones (no se duplican). Slugs con
+  sufijo del id (nunca colisionan, a diferencia del saneo simple que ya
+  usaba el export JSON) porque aquí los archivos se enlazan entre sí y una
+  colisión rompería los links.
+- **GUI**: botón "🗂 Exportar bundle OKF…" en la barra de Biblioteca
+  (proyecto activo) + entrada en el menú contextual por video, en paralelo
+  exacto a "📦 Exportar corpus JSON…" ya existente.
+- **Tests**: `tests/unit/test_okf_export_service.py` (7 nuevos) — estructura
+  del bundle, slugs sin colisión, escape de frontmatter (comillas/saltos de
+  línea), fusión de entidades entre videos, filtrado de no-completados,
+  contenido del índice.
+
+125 tests (118→125), ruff limpio. Smoke offscreen de `LibraryView` confirma
+que el botón nuevo se crea y conecta sin errores. No se probó aún generando
+un bundle real sobre los 12 videos ya cargados en la biblioteca del usuario.
+
+### Pendiente / próxima sesión
+1. Generar un bundle OKF real sobre la biblioteca existente (12 videos) y
+   abrir un par de archivos `.md` para confirmar que los links entre
+   video↔entidad resuelven de verdad en el explorador de archivos/editor.
+2. El prompt para replicar este mismo patrón en otros proyectos (Bashkar
+   Station, con su propio modelo de entidades canónicas/relaciones) quedó
+   redactado y entregado al usuario — pendiente de que lo ejecute él
+   cuando quiera en ese repo.
+3. Pendientes heredados de sesiones anteriores (API key de LLM para probar
+   la fase 2 del Dossier, E2E histórica con la carpeta real de "Agentes de
+   IA para abogadxs") siguen sin resolver — ver entradas anteriores de este
+   changelog.
+
 ## 2026-07-08 — Reproductor confiable, recorte de video, corpus por proyecto y export JSON
 
 Sesión guiada por la prueba real del usuario con la carpeta "Agentes de IA

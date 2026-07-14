@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -55,6 +57,12 @@ class LibraryView(QWidget):
             "Exporta un JSON por video completado de la vista actual "
             "(chunks con timestamps, entidades y anotaciones)"
         )
+        self.boton_exportar_okf = QPushButton("🗂 Exportar bundle OKF…")
+        self.boton_exportar_okf.setToolTip(
+            "Exporta la vista actual como bundle OKF (Open Knowledge Format): "
+            "markdown + frontmatter por video y por entidad, enlazados entre sí, "
+            "para que otro agente de IA lo lea sin depender de esta app"
+        )
         self.progreso = QProgressBar()
         self.progreso.setVisible(False)
         self.etiqueta_estado = QLabel("")
@@ -79,6 +87,7 @@ class LibraryView(QWidget):
         barra.addWidget(self.boton_agregar)
         barra.addWidget(self.boton_continuar)
         barra.addWidget(self.boton_exportar)
+        barra.addWidget(self.boton_exportar_okf)
         barra.addWidget(self.etiqueta_estado, stretch=1)
 
         layout = QVBoxLayout(self)
@@ -91,6 +100,7 @@ class LibraryView(QWidget):
         self.boton_agregar.clicked.connect(self._agregar_carpeta)
         self.boton_continuar.clicked.connect(self.continuar_procesando)
         self.boton_exportar.clicked.connect(self._exportar_corpus_proyecto)
+        self.boton_exportar_okf.clicked.connect(self._exportar_okf_proyecto)
         self._worker = None
         self._worker_dossier = None  # flujo independiente de la ingesta
         self._worker_eliminar = None  # flujo independiente de la ingesta
@@ -183,6 +193,8 @@ class LibraryView(QWidget):
         )
         accion_exportar = menu.addAction("📦 Exportar corpus JSON…")
         accion_exportar.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
+        accion_exportar_okf = menu.addAction("🗂 Exportar bundle OKF…")
+        accion_exportar_okf.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
         menu.addSeparator()
         accion_desasignar = menu.addAction("📤 Quitar del proyecto")
         accion_desasignar.setEnabled(tiene_proyecto)
@@ -194,6 +206,8 @@ class LibraryView(QWidget):
             self._recortar_video(video_id, _ruta, item_titulo.text())
         elif elegida == accion_exportar:
             self._exportar_corpus_video(video_id, item_titulo.text())
+        elif elegida == accion_exportar_okf:
+            self._exportar_okf_video(video_id, item_titulo.text())
         elif elegida == accion_desasignar:
             self._desasignar_proyecto(video_id)
         elif elegida == accion_eliminar:
@@ -245,6 +259,57 @@ class LibraryView(QWidget):
             return
         self._registrar(f"Corpus del proyecto exportado: {len(escritos)} JSON en {carpeta}")
         self.etiqueta_estado.setText(f"Corpus exportado: {len(escritos)} archivo(s) en {carpeta}")
+
+    def _exportar_okf_video(self, video_id: str, titulo: str) -> None:
+        from videoindex.application.okf_export_service import exportar_video_okf
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
+
+        carpeta = QFileDialog.getExistingDirectory(self, "Carpeta destino del bundle OKF")
+        if not carpeta:
+            return
+        nombre_seguro = "".join(c if c.isalnum() or c in " _-." else "_" for c in titulo)
+        destino = Path(carpeta) / f"{nombre_seguro}_okf"
+        con = conectar(paths.DB_PATH)
+        try:
+            escritos = exportar_video_okf(con, video_id, destino)
+        except Exception as exc:
+            self._error(str(exc))
+            return
+        finally:
+            con.close()
+        self._registrar(f"Bundle OKF exportado: {len(escritos)} archivo(s) en {destino}")
+        self.etiqueta_estado.setText(f"Bundle OKF exportado a {destino}")
+
+    def _exportar_okf_proyecto(self) -> None:
+        from videoindex.application.okf_export_service import exportar_proyecto_okf
+        from videoindex.config import paths
+        from videoindex.infrastructure.db.connection import conectar
+
+        carpeta = QFileDialog.getExistingDirectory(self, "Carpeta destino del bundle OKF")
+        if not carpeta:
+            return
+        con = conectar(paths.DB_PATH)
+        try:
+            escritos = exportar_proyecto_okf(con, self._proyecto_activo, carpeta)
+        except Exception as exc:
+            self._error(str(exc))
+            return
+        finally:
+            con.close()
+        if len(escritos) <= 1:  # solo index.md vacío: ningún video completado en la vista
+            QMessageBox.information(
+                self,
+                "Exportar bundle OKF",
+                "No hay videos completados en la vista actual: nada que exportar.",
+            )
+            return
+        self._registrar(
+            f"Bundle OKF del proyecto exportado: {len(escritos)} archivo(s) en {carpeta}"
+        )
+        self.etiqueta_estado.setText(
+            f"Bundle OKF exportado: {len(escritos)} archivo(s) en {carpeta}"
+        )
 
     def _recortar_video(self, video_id: str, ruta: str, titulo: str) -> None:
         if self._worker is not None and self._worker.isRunning():
