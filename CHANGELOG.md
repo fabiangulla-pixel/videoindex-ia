@@ -30,13 +30,22 @@ conocimiento, ADR-003).
   contenido del índice.
 
 125 tests (118→125), ruff limpio. Smoke offscreen de `LibraryView` confirma
-que el botón nuevo se crea y conecta sin errores. No se probó aún generando
-un bundle real sobre los 12 videos ya cargados en la biblioteca del usuario.
+que el botón nuevo se crea y conecta sin errores.
+
+### Despliegue
+`.exe` recompilado con `scripts\build_exe.ps1` (`--clean`), verificado que el
+PYZ contiene `okf_export_service`, smoke test (~8s vivo, ~160MB RAM, sin
+stderr) OK. Sincronizado con `robocopy /MIR /XD data` (1.11 GB, 5662 archivos,
+0 errores, ~39 min por ser hacia Google Drive) a
+`I:\Mi unidad\00_Programas y macros\VideoIndex IA\Para usar en cualquier PC\VideoIndexIA\`
+— `data\videoindex.db` (la biblioteca de 12 videos del usuario) quedó intacta.
+Segundo smoke test sobre el binario ya desplegado, también limpio.
 
 ### Pendiente / próxima sesión
 1. Generar un bundle OKF real sobre la biblioteca existente (12 videos) y
    abrir un par de archivos `.md` para confirmar que los links entre
-   video↔entidad resuelven de verdad en el explorador de archivos/editor.
+   video↔entidad resuelven de verdad en el explorador de archivos/editor
+   (solo se probó con datos sintéticos de test hasta ahora).
 2. El prompt para replicar este mismo patrón en otros proyectos (Bashkar
    Station, con su propio modelo de entidades canónicas/relaciones) quedó
    redactado y entregado al usuario — pendiente de que lo ejecute él
