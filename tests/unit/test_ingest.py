@@ -40,6 +40,16 @@ def test_escanear_carpeta_idempotente_por_checksum(con, tmp_path):
     assert len(r2.pendientes_previos) == 1
 
 
+def test_escanear_carpeta_admite_audio_puro_e_ignora_no_multimedia(con, tmp_path):
+    _crear_video(tmp_path, "clase.mp3", b"audio falso")
+    _crear_video(tmp_path, "apuntes.txt", b"esto no es multimedia")
+
+    resultado = IngestService(con).escanear_carpeta(tmp_path)
+
+    assert len(resultado.nuevos) == 1
+    assert resultado.nuevos[0].title == "clase"
+
+
 def test_escanear_carpeta_asigna_proyecto_a_videos_nuevos(con, tmp_path):
     from videoindex.infrastructure.db.repositories import ProjectRepo
 

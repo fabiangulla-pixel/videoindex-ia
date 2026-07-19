@@ -437,7 +437,7 @@ class LibraryView(QWidget):
     def _agregar_carpeta(self):
         if self._worker is not None and self._worker.isRunning():
             return  # guardia: ya hay un escaneo/lote en curso
-        carpeta = QFileDialog.getExistingDirectory(self, "Carpeta con videos")
+        carpeta = QFileDialog.getExistingDirectory(self, "Carpeta con videos o audios")
         if not carpeta:
             return
         self.etiqueta_estado.setText("Escaneando carpeta (checksums)…")

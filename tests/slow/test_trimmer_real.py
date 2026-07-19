@@ -72,6 +72,39 @@ def test_reporta_progreso_creciente(tmp_path):
     assert fracciones == sorted(fracciones)  # monótono creciente
 
 
+def _generar_wav(destino, segundos=4, sample_rate=16000):
+    import av
+    import numpy as np
+
+    with av.open(str(destino), "w") as out:
+        stream = out.add_stream("pcm_s16le", rate=sample_rate)
+        stream.layout = "mono"
+        n = segundos * sample_rate
+        muestras = np.zeros((1, n), dtype=np.int16)
+        frame = av.AudioFrame.from_ndarray(muestras, format="s16", layout="mono")
+        frame.sample_rate = sample_rate
+        for paquete in stream.encode(frame):
+            out.mux(paquete)
+        for paquete in stream.encode():
+            out.mux(paquete)
+
+
+def test_reporta_progreso_creciente_en_audio_puro(tmp_path):
+    # Antes del fix, progreso() solo se emitía en paquetes de stream "video":
+    # en un archivo de solo audio (mp3/wav) nunca se llamaba, dejando la
+    # barra de progreso del recorte congelada en 0% aunque el recorte
+    # terminara bien.
+    origen = tmp_path / "audio.wav"
+    _generar_wav(origen, segundos=4)
+
+    fracciones: list[float] = []
+    recortar_video(origen, tmp_path / "r.wav", 0.0, 4.0, progreso=fracciones.append)
+
+    assert fracciones
+    assert all(0.0 <= f <= 1.0 for f in fracciones)
+    assert fracciones == sorted(fracciones)
+
+
 def test_rango_invalido_lanza(tmp_path):
     origen = tmp_path / "original.mp4"
     _generar_mp4(origen, segundos=2)

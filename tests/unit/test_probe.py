@@ -1,9 +1,15 @@
 """Detección de negro/silencio inicial (luminancia de video) — sin decodificar
 video real: la lógica de umbral se testea con arrays numpy sintéticos."""
 
+from pathlib import Path
+
 import numpy as np
 
-from videoindex.infrastructure.media.probe import _es_frame_claro, detectar_inicio_contenido
+from videoindex.infrastructure.media.probe import (
+    _es_frame_claro,
+    detectar_inicio_contenido,
+    es_video,
+)
 
 
 def test_frame_negro_no_supera_umbral():
@@ -37,3 +43,21 @@ def test_archivo_de_audio_puro_devuelve_cero(tmp_path):
         w.setframerate(16000)
         w.writeframes(b"\x00\x00" * 1600)
     assert detectar_inicio_contenido(str(ruta)) == 0.0
+
+
+def test_es_video_reconoce_formatos_de_audio_puro():
+    for ext in (".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".wma"):
+        assert es_video(Path(f"clase{ext}")), f"{ext} debería aceptarse"
+
+
+def test_es_video_reconoce_formatos_de_video_adicionales():
+    for ext in (".mp4", ".mkv", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".3gp"):
+        assert es_video(Path(f"clase{ext}")), f"{ext} debería aceptarse"
+
+
+def test_es_video_rechaza_extension_desconocida():
+    assert not es_video(Path("notas.txt"))
+
+
+def test_es_video_no_distingue_mayusculas():
+    assert es_video(Path("CLASE.MP3"))

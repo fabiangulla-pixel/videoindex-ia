@@ -50,6 +50,12 @@ def recortar_video(
         if not streams_entrada:
             raise ValueError(f"El archivo no tiene streams de video/audio: {origen}")
         mapa = {s.index: salida.add_stream_from_template(s) for s in streams_entrada}
+        # Stream guía para el progreso: video si lo hay; si es audio puro
+        # (mp3/wav/...) no habría stream "video" y progreso() nunca se
+        # llamaría, dejando la barra de progreso congelada en 0%.
+        indice_guia = next(
+            (s.index for s in streams_entrada if s.type == "video"), streams_entrada[0].index
+        )
 
         duracion_total = (entrada.duration or 0) / av.time_base
         fin_efectivo = fin_s if fin_s is not None else duracion_total
@@ -85,7 +91,7 @@ def recortar_video(
             packet.stream = destino_stream
             salida.mux(packet)
 
-            if progreso and destino_stream.type == "video":
+            if progreso and indice == indice_guia:
                 progreso(min(1.0, max(0.0, (t - inicio_s) / ventana)))
 
     return destino

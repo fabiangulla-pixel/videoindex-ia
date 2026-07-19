@@ -5,7 +5,30 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-EXTENSIONES_VIDEO = {".mp4", ".mkv", ".avi", ".webm", ".mov", ".m4v", ".mp3", ".m4a", ".wav"}
+EXTENSIONES_VIDEO = {
+    # video
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".webm",
+    ".mov",
+    ".m4v",
+    ".wmv",
+    ".flv",
+    ".mpg",
+    ".mpeg",
+    ".ts",
+    ".3gp",
+    # audio
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".flac",
+    ".ogg",
+    ".opus",
+    ".aac",
+    ".wma",
+}
 
 
 def duracion_segundos(ruta: str | Path) -> float | None:
