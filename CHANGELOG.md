@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-07-19 — Soporte ampliado de formatos multimedia
+
+El usuario pidió que la app admitiera más formatos además de mp4 (mp3, wav,
+etc.). El pipeline (transcripción, indexado, reproductor, recorte) ya era
+agnóstico al contenedor vía PyAV/faster-whisper — el único punto real de
+bloqueo era la lista blanca de extensiones en `es_video()`.
+
+- **`infrastructure/media/probe.py`**: `EXTENSIONES_VIDEO` pasa de 9 a 20
+  extensiones — video (mp4, mkv, avi, webm, mov, m4v, wmv, flv, mpg, mpeg,
+  ts, 3gp) y audio puro (mp3, m4a, wav, flac, ogg, opus, aac, wma).
+- **`infrastructure/media/trimmer.py`** (bug encontrado de paso): el
+  callback `progreso()` del recorte solo se emitía en paquetes del stream
+  "video" — en un archivo de solo audio nunca se llamaba, dejando la barra
+  de progreso del recorte congelada en 0% aunque el recorte terminara bien.
+  Fix: stream guía (video si existe, si no el primero de audio).
+- **GUI**: texto del diálogo de escaneo actualizado ("Carpeta con videos o
+  audios").
+- **Tests nuevos**: `es_video()` con las 20 extensiones (`test_probe.py`),
+  ingesta de un `.mp3` real ignorando archivos no-multimedia
+  (`test_ingest.py`), progreso creciente en recorte de audio puro
+  (`test_trimmer_real.py`, slow). 124 tests rápidos en verde, ruff limpio.
+
+**Pendiente**: no se probó el pipeline completo (transcripción→segmentación→
+NER→embeddings→índice) con un archivo de audio real (solo wav sintéticos de
+segundos, silenciosos, para los tests unitarios). El usuario decidió no
+hacer esa prueba en esta sesión — queda para la próxima vez que cargue un
+mp3/wav real a la biblioteca.
+
+### Despliegue
+`.exe` recompilado con `scripts\build_exe.ps1` (`--clean`); verificado
+extrayendo el bytecode del PYZ compilado (`ZlibArchiveReader`) que
+`probe.py`/`trimmer.py` contienen los cambios — no se confió solo en el log
+del build. Smoke test (~8s vivo, 166 MB, sin stderr) OK. Sincronizado con
+`robocopy /MIR /XD data` a
+`I:\Mi unidad\00_Programas y macros\VideoIndex IA\Para usar en cualquier PC\VideoIndexIA\`
+(5481/5662 archivos copiados — el resto ya estaba al día por un intento
+anterior interrumpido por corte de sesión; 0 errores, `data\` con la
+biblioteca real de 12 videos intacta).
+
 ## 2026-07-13 — Exportación como bundle OKF (Open Knowledge Format)
 
 Sesión disparada por una pregunta del usuario sobre un estándar nuevo que

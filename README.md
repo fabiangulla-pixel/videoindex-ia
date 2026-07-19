@@ -13,8 +13,9 @@ La especificación completa (PRD, SAD, ADRs) vive en
 
 ## Qué hace el MVP
 
-- **Ingesta** de carpetas locales de video (mp4/mkv/avi/webm/mov + audio),
-  idempotente por checksum sha256: re-escanear no duplica, mover archivos no rompe.
+- **Ingesta** de carpetas locales de video (mp4/mkv/avi/webm/mov/wmv/flv/mpg/mpeg/ts/3gp)
+  y audio puro (mp3/wav/m4a/flac/ogg/opus/aac/wma), idempotente por checksum
+  sha256: re-escanear no duplica, mover archivos no rompe.
 - **Transcripción** 100 % local con faster-whisper (CPU, int8, $0) con
   timestamps absolutos (ADR-002) y confianza por segmento.
 - **Segmentación semántica** local: pausas largas + caída de similitud coseno
