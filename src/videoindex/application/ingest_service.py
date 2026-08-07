@@ -17,6 +17,7 @@ from uuid import uuid4
 from videoindex.domain.models import Video
 from videoindex.infrastructure.db.repositories import VideoRepo
 from videoindex.infrastructure.media.probe import checksum_sha256, duracion_segundos, es_video
+from videoindex.infrastructure.media.youtube import MediaDescargado
 
 
 @dataclass
@@ -58,36 +59,89 @@ class IngestService:
         for i, archivo in enumerate(archivos, 1):
             if progreso:
                 progreso(i, len(archivos), archivo.name)
-            checksum = checksum_sha256(archivo)
-            existente = self.videos.por_checksum(checksum)
-            if existente:
-                if str(archivo) != existente.path:
-                    existente.path = str(archivo)
-                    self.videos.guardar(existente)
-                # Un video ya conocido pero SIN proyecto se adopta al proyecto
-                # bajo el que se está escaneando (caso real: mismos archivos
-                # copiados a otro disco, re-escaneados dentro de un proyecto
-                # nuevo — sin esto quedaban invisibles bajo el filtro del
-                # proyecto). Si ya pertenece a OTRO proyecto, se respeta.
-                if project_id is not None and existente.project_id is None:
-                    existente.project_id = project_id
-                    self.videos.asignar_proyecto(existente.video_id, project_id)
-                if existente.processing_status == "completed":
-                    resultado.ya_completados.append(existente)
-                else:
-                    resultado.pendientes_previos.append(existente)
-                continue
-
-            video = Video(
-                video_id=str(uuid4()),
-                title=archivo.stem,
-                path=str(archivo),
-                checksum=checksum,
-                duration_seconds=duracion_segundos(archivo),
-                course_name=course_name,
-                session_name=archivo.stem,
-                project_id=project_id,
-            )
-            self.videos.guardar(video)
-            resultado.nuevos.append(video)
+            self._registrar(archivo, resultado, course_name, project_id)
         return resultado
+
+    def registrar_descarga(
+        self,
+        media: MediaDescargado,
+        course_name: str | None = None,
+        project_id: str | None = None,
+    ) -> ResultadoIngesta:
+        """Alta de un archivo recién bajado de una URL.
+
+        Misma identidad por checksum que el escaneo de carpeta: bajar dos
+        veces el mismo video no lo duplica en la biblioteca (y si ya estaba
+        como archivo local, se le añade la procedencia sin re-transcribir).
+        """
+        resultado = ResultadoIngesta()
+        self._registrar(
+            media.ruta,
+            resultado,
+            course_name,
+            project_id,
+            titulo=media.titulo,
+            source_url=media.url,
+            source_channel=media.canal,
+            source_published_at=media.fecha_publicacion,
+        )
+        return resultado
+
+    def _registrar(
+        self,
+        archivo: Path,
+        resultado: ResultadoIngesta,
+        course_name: str | None,
+        project_id: str | None,
+        titulo: str | None = None,
+        source_url: str | None = None,
+        source_channel: str | None = None,
+        source_published_at: str | None = None,
+    ) -> None:
+        """Alta idempotente de UN archivo, compartida por el escaneo de
+        carpeta y la descarga por URL."""
+        checksum = checksum_sha256(archivo)
+        existente = self.videos.por_checksum(checksum)
+        if existente:
+            cambio = str(archivo) != existente.path
+            if cambio:
+                existente.path = str(archivo)
+            # La procedencia se completa si llega ahora y no estaba (el
+            # UPSERT del repo usa COALESCE: nunca borra la que ya había).
+            if source_url and not existente.source_url:
+                existente.source_url = source_url
+                existente.source_channel = source_channel
+                existente.source_published_at = source_published_at
+                cambio = True
+            if cambio:
+                self.videos.guardar(existente)
+            # Un video ya conocido pero SIN proyecto se adopta al proyecto
+            # bajo el que se está escaneando (caso real: mismos archivos
+            # copiados a otro disco, re-escaneados dentro de un proyecto
+            # nuevo — sin esto quedaban invisibles bajo el filtro del
+            # proyecto). Si ya pertenece a OTRO proyecto, se respeta.
+            if project_id is not None and existente.project_id is None:
+                existente.project_id = project_id
+                self.videos.asignar_proyecto(existente.video_id, project_id)
+            if existente.processing_status == "completed":
+                resultado.ya_completados.append(existente)
+            else:
+                resultado.pendientes_previos.append(existente)
+            return
+
+        nombre = titulo or archivo.stem
+        video = Video(
+            video_id=str(uuid4()),
+            title=nombre,
+            path=str(archivo),
+            checksum=checksum,
+            duration_seconds=duracion_segundos(archivo),
+            course_name=course_name,
+            session_name=nombre,
+            project_id=project_id,
+            source_url=source_url,
+            source_channel=source_channel,
+            source_published_at=source_published_at,
+        )
+        self.videos.guardar(video)
+        resultado.nuevos.append(video)

@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # sin ventana real
 os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
+# BD desechable, por dos razones: no tocar la biblioteca real del usuario y,
+# sobre todo, no colgar el smoke. Con la BD real, MainWindow abre al arrancar
+# un QMessageBox modal si hay videos a medio procesar ("¿continuar?") y
+# offscreen nadie puede cerrarlo: el script se queda esperando para siempre.
+os.environ.setdefault("VIDEOINDEX_DATA", tempfile.mkdtemp(prefix="videoindex_smoke_"))
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication

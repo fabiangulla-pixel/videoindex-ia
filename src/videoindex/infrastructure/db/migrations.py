@@ -45,6 +45,35 @@ ALTER TABLE videos ADD COLUMN project_id TEXT REFERENCES projects(project_id) ON
 CREATE INDEX IF NOT EXISTS idx_videos_project ON videos(project_id);
 """
 
+# Hablantes (diarización) + procedencia del material.
+#
+# - transcript_segments.speaker: etiqueta anónima ("SPEAKER_00") que la
+#   diarización asigna a cada segmento. NULL = video sin diarizar (todos los
+#   ya procesados antes de esta migración): nada del pipeline lo exige.
+# - semantic_chunks.speakers: las etiquetas del chunk como CSV, para no
+#   recalcularlas leyendo sus segmentos en cada búsqueda.
+# - video_speakers: el nombre REAL que el usuario le pone a cada etiqueta
+#   ("SPEAKER_00" → "Marta Ríos"). Por video: la diarización distingue voces
+#   dentro de una grabación, no identifica personas entre grabaciones.
+# - videos.source_*: de dónde salió el archivo (URL, canal, fecha de
+#   publicación) cuando no vino de una carpeta local. Es lo que hace falta
+#   para citar la fuente en un producto editorial.
+_V5_HABLANTES_Y_PROCEDENCIA = """
+ALTER TABLE transcript_segments ADD COLUMN speaker TEXT;
+ALTER TABLE semantic_chunks ADD COLUMN speakers TEXT;
+ALTER TABLE videos ADD COLUMN source_url TEXT;
+ALTER TABLE videos ADD COLUMN source_channel TEXT;
+ALTER TABLE videos ADD COLUMN source_published_at TEXT;
+CREATE TABLE IF NOT EXISTS video_speakers (
+    video_id      TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    speaker_label TEXT NOT NULL,
+    display_name  TEXT NOT NULL,
+    PRIMARY KEY (video_id, speaker_label)
+);
+CREATE INDEX IF NOT EXISTS idx_segments_speaker
+    ON transcript_segments(video_id, speaker);
+"""
+
 # Cada entrada: (versión, SQL). La v1 es el schema.sql completo; futuras
 # migraciones se agregan aquí como ALTER/CREATE incrementales.
 _MIGRACIONES: list[tuple[int, str]] = [
@@ -52,6 +81,7 @@ _MIGRACIONES: list[tuple[int, str]] = [
     (2, _V2_ANOTACIONES),
     (3, _V3_CONTENT_START),
     (4, _V4_PROYECTOS),
+    (5, _V5_HABLANTES_Y_PROCEDENCIA),
 ]
 
 

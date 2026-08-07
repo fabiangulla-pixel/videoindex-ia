@@ -27,6 +27,13 @@ class Video:
     content_start_s: float | None = None
     # None = "Sin proyecto" (videos de antes de esta feature, o sin asignar).
     project_id: str | None = None
+    # Procedencia: de dónde salió el archivo cuando NO se escaneó de una
+    # carpeta local (descarga de YouTube y similares). Son los datos que un
+    # producto editorial necesita para citar la fuente, así que se guardan
+    # con el video, no en un log aparte. None = archivo local sin origen web.
+    source_url: str | None = None
+    source_channel: str | None = None
+    source_published_at: str | None = None  # ISO YYYY-MM-DD tal como lo da la fuente
 
 
 @dataclass
@@ -45,10 +52,43 @@ class TranscriptSegment:
     raw_text: str
     clean_text: str
     confidence: float = 0.0
+    # Etiqueta anónima del hablante ("SPEAKER_00"), asignada por la
+    # diarización. None = sin diarizar (videos previos a esta feature, o
+    # diarización desactivada/fallida): el resto del pipeline no depende
+    # de este campo, solo lo enriquece.
+    speaker: str | None = None
 
     @property
     def duration(self) -> float:
         return self.end_time - self.start_time
+
+
+@dataclass
+class SpeakerTurn:
+    """Tramo continuo de audio atribuido a un mismo hablante, con timestamps
+    ABSOLUTOS (ADR-002). Es lo que devuelve un DiarizationProvider, con
+    independencia de cómo Whisper haya cortado sus segmentos."""
+
+    start_time: float
+    end_time: float
+    speaker: str
+
+    @property
+    def duration(self) -> float:
+        return self.end_time - self.start_time
+
+
+@dataclass
+class Speaker:
+    """Nombre real que el usuario le pone a una etiqueta anónima de la
+    diarización ("SPEAKER_00" → "Marta Ríos"). Vive por video: la misma
+    persona en otro video vuelve a ser una etiqueta anónima hasta que se
+    la nombre allí (la diarización no identifica personas, solo distingue
+    voces dentro de una grabación)."""
+
+    video_id: str
+    speaker_label: str
+    display_name: str
 
 
 @dataclass
@@ -64,6 +104,10 @@ class SemanticChunk:
     discourse_type: str = "exposicion"
     avg_confidence: float = 0.0
     segment_ids: list[str] = field(default_factory=list)
+    # Etiquetas de hablante presentes en el chunk, en orden de aparición.
+    # Vacío = video sin diarizar. Con la diarización activa un chunk suele
+    # tener UNA sola (el cambio de hablante es frontera dura de chunk).
+    speakers: list[str] = field(default_factory=list)
 
 
 @dataclass

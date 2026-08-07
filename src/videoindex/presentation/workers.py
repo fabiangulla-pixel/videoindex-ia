@@ -76,6 +76,63 @@ class EscaneoWorker(QThread):
                 con.close()
 
 
+class DescargaWorker(QThread):
+    """Baja el audio de una o varias URLs y las da de alta en la biblioteca.
+
+    Descarga y alta van en el MISMO hilo a propósito: el checksum del archivo
+    recién bajado es lo que hace idempotente la ingesta, y separarlo en dos
+    pasos abriría la puerta a re-descargar lo que ya está.
+    """
+
+    progreso = Signal(int, int, str)  # indice, total, mensaje
+    terminado = Signal(object, list)  # ResultadoIngesta, list[str] de errores
+    fallo = Signal(str)
+
+    def __init__(self, urls: list[str], project_id: str | None = None):
+        super().__init__()
+        self.urls = urls
+        self.project_id = project_id
+
+    def run(self):
+        con = None
+        try:
+            from videoindex.application.ingest_service import IngestService, ResultadoIngesta
+            from videoindex.infrastructure.db.connection import conectar
+            from videoindex.infrastructure.media.youtube import descargar_audio
+
+            paths.ensure_dirs()
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            servicio = IngestService(con)
+            total = ResultadoIngesta()
+            errores: list[str] = []
+
+            for i, url in enumerate(self.urls, 1):
+                self.progreso.emit(i, len(self.urls), f"Descargando {url}")
+                try:
+                    media = descargar_audio(
+                        url,
+                        paths.DESCARGAS_DIR,
+                        lambda f, texto, i=i: self.progreso.emit(i, len(self.urls), texto),
+                    )
+                except Exception as exc:
+                    # Una URL rota no puede tumbar el resto del lote (mismo
+                    # criterio que un video malo en procesar_lote).
+                    errores.append(f"{url}: {exc}")
+                    continue
+                self.progreso.emit(i, len(self.urls), f"Registrando «{media.titulo}»")
+                parcial = servicio.registrar_descarga(media, project_id=self.project_id)
+                total.nuevos += parcial.nuevos
+                total.ya_completados += parcial.ya_completados
+                total.pendientes_previos += parcial.pendientes_previos
+
+            self.terminado.emit(total, errores)
+        except Exception as exc:
+            self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
+
+
 class PipelineWorker(QThread):
     """Procesa el lote completo; emite progreso por etapa y por video.
 
@@ -96,8 +153,10 @@ class PipelineWorker(QThread):
         try:
             from videoindex.application.pipeline_service import PipelineService
             from videoindex.application.time_estimator import TimeEstimator
+            from videoindex.config.settings import factor_tiempo
             from videoindex.infrastructure.db.connection import conectar
             from videoindex.infrastructure.db.repositories import VideoRepo
+            from videoindex.infrastructure.diarization.ecapa_provider import crear_diarizador
             from videoindex.infrastructure.transcription.faster_whisper_provider import (
                 FasterWhisperProvider,
             )
@@ -116,9 +175,17 @@ class PipelineWorker(QThread):
                 SETTINGS.transcription.condition_on_previous_text,
             )
             pipeline = PipelineService(
-                con, transcriptor, servicios.embedder, servicios.ner, servicios.faiss, SETTINGS
+                con,
+                transcriptor,
+                servicios.embedder,
+                servicios.ner,
+                servicios.faiss,
+                SETTINGS,
+                crear_diarizador(SETTINGS.diarization),
             )
-            estimador = TimeEstimator(SETTINGS.transcription.factor_tiempo_inicial)
+            estimador = TimeEstimator(
+                factor_tiempo(SETTINGS.transcription.modelo, SETTINGS.diarization.activa)
+            )
             ok, fail = pipeline.procesar_lote(videos, self.progreso.emit, estimador.calibrar)
             self.terminado.emit(ok, fail)
         except Exception as exc:

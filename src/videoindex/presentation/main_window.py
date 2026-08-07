@@ -64,7 +64,7 @@ class MainWindow(QMainWindow):
         self.preguntar = None
 
         menu = self.menuBar().addMenu("&Configuración")
-        accion_config = QAction("API Keys y modelo por defecto…", self)
+        accion_config = QAction("API Keys, modelo y transcripción…", self)
         accion_config.triggered.connect(self._abrir_configuracion)
         menu.addAction(accion_config)
 

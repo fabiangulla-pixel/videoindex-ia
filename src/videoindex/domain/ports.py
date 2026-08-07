@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from videoindex.domain.models import TranscriptSegment
+from videoindex.domain.models import SpeakerTurn, TranscriptSegment
 
 
 class TranscriptionProvider(Protocol):
@@ -20,6 +20,25 @@ class TranscriptionProvider(Protocol):
     ) -> list[TranscriptSegment]:
         """Transcribe el video completo con timestamps absolutos en segundos.
         progreso(fraccion 0..1): avance real dentro de este video, opcional."""
+        ...
+
+
+class DiarizationProvider(Protocol):
+    def diarizar(
+        self,
+        ruta_media: str,
+        regiones: list[tuple[float, float]],
+        progreso: Callable[[float], None] | None = None,
+    ) -> list[SpeakerTurn]:
+        """Turnos de habla con timestamps absolutos en segundos.
+
+        `regiones` son los tramos con voz ya detectados (en la práctica, los
+        segmentos de Whisper, que ya pasaron por su VAD): permite a una
+        implementación barata limitarse a decidir QUIÉN habla en cada tramo
+        en vez de resolver también DÓNDE hay voz. Una implementación con VAD
+        propio (pyannote) puede ignorarlas y devolver sus propios turnos: el
+        contrato es el mismo y quien consume asigna por solapamiento.
+        """
         ...
 
 

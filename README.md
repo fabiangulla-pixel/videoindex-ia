@@ -16,8 +16,20 @@ La especificación completa (PRD, SAD, ADRs) vive en
 - **Ingesta** de carpetas locales de video (mp4/mkv/avi/webm/mov/wmv/flv/mpg/mpeg/ts/3gp)
   y audio puro (mp3/wav/m4a/flac/ogg/opus/aac/wma), idempotente por checksum
   sha256: re-escanear no duplica, mover archivos no rompe.
+- **Ingesta desde URL** (YouTube y los ~1800 sitios de yt-dlp): baja solo la
+  pista de audio y registra el título, canal y fecha de publicación reales —
+  la ficha de procedencia que hace falta para citar la fuente. Misma
+  identidad por checksum: bajar dos veces no duplica.
 - **Transcripción** 100 % local con faster-whisper (CPU, int8, $0) con
-  timestamps absolutos (ADR-002) y confianza por segmento.
+  timestamps absolutos (ADR-002) y confianza por segmento. El modelo se
+  elige desde la GUI (`small` para buscar, `large-v3-turbo` para publicar).
+- **Separación de voces** ($0, local): quién dice qué y cuándo, con
+  embeddings ECAPA y agrupamiento. Las etiquetas anónimas se renombran a
+  mano ("SPEAKER_00" → "Marta Ríos") y ese nombre se usa en todo lo que se
+  exporte. Un cambio de hablante corta el chunk, para no atribuir mal una cita.
+- **Exportación editorial** de la transcripción a Word / Markdown / SRT, con
+  ficha de procedencia y la advertencia de que es transcripción automática
+  sin cotejar.
 - **Segmentación semántica** local: pausas largas + caída de similitud coseno
   entre ventanas → Semantic Chunks (ADR-001), con `discourse_type` heurístico.
 - **Entidades** (spaCy es) + **grafo simple** de co-ocurrencia (ADR-005).
@@ -66,6 +78,26 @@ redirigibles con la variable `VIDEOINDEX_DATA`.
 
 - **Python 3.12 obligatorio** en el venv: ctranslate2 (faster-whisper) no
   soporta 3.14.
+- **La diarización usa ECAPA (speechbrain), no pyannote**, que es el estándar
+  del campo: el pipeline `pyannote/speaker-diarization-3.1` depende de
+  `pyannote/segmentation-3.0`, un modelo *gated* que responde 401 sin token
+  de Hugging Face y sin aceptar sus condiciones en la web. `speechbrain/
+  spkrec-ecapa-voxceleb` es abierto y no pide cuenta. El precio: **no se
+  detecta habla superpuesta** — cuando dos personas hablan a la vez, ese
+  tramo se le atribuye a una sola.
+- **El umbral automático de voces (0.65) NO está calibrado** con grabaciones
+  reales: sale de la convención de speechbrain (similitud ≥ 0.25 = misma
+  persona). Si sabes cuántas personas hablan, fijar el número en
+  Configuración es bastante más fiable que el umbral.
+- **No se valida la diarización con audio sintético**: los embeddings de
+  tonos artificiales caen todos juntos en una zona del espacio donde las
+  distancias no se parecen a las de voz real (medido: <0.28 entre dos
+  "voces" sintéticas, frente a >0.6 entre dos personas). Los tests slow
+  fijan `n_hablantes` por eso.
+- **La descarga por URL no usa ffmpeg**: baja `bestaudio[ext=m4a]` sin
+  postproceso, así que no hace falta tener ffmpeg instalado (PyAV decodifica).
+- **`VideoIndexIA.spec` está versionado a propósito** pese al `*.spec` del
+  `.gitignore`: está editado a mano y sin él no se reconstruye el `.exe`.
 - **`QT_MEDIA_BACKEND=windows`** (lo fija `app.py`): el backend ffmpeg de Qt
   crashea al renderizar video en esta máquina; el nativo WMF funciona. El seek
   se hace 300 ms después de `play()` o WMF lo pisa.

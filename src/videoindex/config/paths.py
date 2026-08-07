@@ -23,8 +23,15 @@ DATA_DIR = Path(os.environ.get("VIDEOINDEX_DATA", PROJECT_ROOT / "data"))
 DB_PATH = DATA_DIR / "videoindex.db"
 FAISS_DIR = DATA_DIR / "faiss"
 CHECKPOINT_DIR = DATA_DIR / "checkpoints"
+# Modelos que una librería copia fuera de su caché de HuggingFace
+# (speechbrain necesita un savedir propio).
+MODELOS_DIR = DATA_DIR / "modelos"
+# Audio/video bajado de una URL. Va bajo DATA_DIR y no en una carpeta
+# temporal: el archivo es la fuente de la transcripción y el reproductor
+# lo necesita después, no solo durante la ingesta.
+DESCARGAS_DIR = DATA_DIR / "descargas"
 
 
 def ensure_dirs() -> None:
-    for d in (DATA_DIR, FAISS_DIR, CHECKPOINT_DIR):
+    for d in (DATA_DIR, FAISS_DIR, CHECKPOINT_DIR, MODELOS_DIR, DESCARGAS_DIR):
         d.mkdir(parents=True, exist_ok=True)

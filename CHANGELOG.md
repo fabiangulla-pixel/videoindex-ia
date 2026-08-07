@@ -1,5 +1,93 @@
 # Changelog
 
+## 2026-08-07 — Quién dijo qué (diarización) e ingesta desde YouTube
+
+Dos features pedidas juntas, con un destino concreto: convertir una charla
+grabada en un texto publicable (transcripción editada para la revista
+*Anales* de la U. de Chile).
+
+### Separación de voces (quién habla y cuándo)
+
+- **`domain/diarization.py`** (lógica pura, sin modelos): asignación de
+  hablante por **solapamiento temporal máximo** — los cortes de Whisper y los
+  de la diarización nunca coinciden, así que no se puede casar por igualdad
+  de tiempos. Un segmento sin turno hereda el hablante del anterior (las
+  interjecciones cortas no deben partir una intervención en tres).
+  `agrupar_intervenciones()` convierte segmentos sueltos en las
+  intervenciones legibles que son la unidad de una transcripción publicable.
+- **`infrastructure/diarization/ecapa_provider.py`**: embeddings de voz
+  ECAPA-TDNN + agrupamiento jerárquico. 100 % local, $0, sin API.
+  **Por qué no pyannote** (el estándar del campo): su pipeline depende de
+  `pyannote/segmentation-3.0`, modelo *gated* que devuelve 401 sin token de
+  HF — rompía la promesa de "descarga y funciona". Se verificó con HEAD
+  requests antes de decidir. **Limitación aceptada**: no detecta habla
+  superpuesta.
+- **`infrastructure/media/audio.py`**: decodificación a PCM mono 16 kHz con
+  PyAV (sin ffmpeg). Se guarda int16 y se convierte tramo a tramo: una
+  grabación de 2 h son 230 MB en int16 y el doble en float32.
+- **Migración v5**: `transcript_segments.speaker`, `semantic_chunks.speakers`,
+  tabla `video_speakers` (el nombre REAL que el usuario le pone a cada voz) y
+  `videos.source_url/source_channel/source_published_at`.
+- **Segmentación**: un cambio de hablante es **frontera dura** de chunk y no
+  respeta `chunk_min_s` — un chunk que mezcla voces atribuye mal las citas, y
+  eso pesa más que quedarse corto. Desactivable (`cortar_por_hablante`).
+- **El pipeline nunca se cae por la diarización**: si el modelo de voz falla,
+  se registra y el video se completa sin etiquetas. Perder las etiquetas
+  degrada el resultado; perder una hora de transcripción, no.
+- **GUI**: menú contextual → "🗣 Transcripción y hablantes…", ventana
+  **no-modal** (se usa contra el reproductor: doble clic en una intervención
+  salta a ese minuto para verificarla de oído). Renombrar guarda al vuelo.
+
+### Ingesta desde URL
+
+- **`infrastructure/media/youtube.py`**: baja **solo audio**
+  (`bestaudio[ext=m4a]`, sin postproceso → **no requiere ffmpeg**) y devuelve
+  título, canal y fecha reales. `noplaylist`: una URL con `list=` baja ese
+  video, no el curso entero; para varios, una URL por línea.
+- Localiza el archivo por id cuando el servidor sirve otra extensión que la
+  que `prepare_filename` había predicho (m4a pedido → webm servido).
+- **Idempotente por checksum**, igual que el escaneo de carpeta. Si el audio
+  ya estaba como archivo local, no se re-transcribe: se le **añade** la
+  procedencia (el UPSERT usa COALESCE, nunca borra la que ya había).
+- Una URL rota no tumba el lote; se reportan al final.
+
+### Exportación editorial
+
+- **`application/transcript_export_service.py`**: la transcripción como
+  documento de trabajo en **Word** (estilos reales, no texto plano en .docx),
+  **Markdown** y **SRT**. Los tres llevan ficha de procedencia (fuente,
+  canal, fecha, duración) y la advertencia de que es transcripción automática
+  pendiente de cotejo con el audio.
+
+### Modelo de Whisper configurable
+
+- Antes estaba cableado a `small`. Ahora se elige en Configuración →
+  Transcripción, con el costo en tiempo de cada modelo a la vista. `small`
+  alcanza para buscar; para publicar, `large-v3-turbo`.
+- Las preferencias de las dos pestañas se **mezclan** en el JSON en vez de
+  reemplazarlo: guardar una pestaña ya no borra la otra.
+- El ETA usa el factor del modelo elegido + el sobrecosto de diarizar.
+
+### Pase de Modo Ingeniero
+
+- **`VideoIndexIA.spec` ahora se versiona**: el `.gitignore` lo excluía con
+  la regla genérica `*.spec`, pero está editado a mano y sin él no se
+  reconstruye el `.exe`. Actualizado además con `collect_all` de speechbrain
+  (sus hiperparámetros son YAML, no código) y yt-dlp (extractores dinámicos).
+- **Dependencias declaradas** en `pyproject.toml`: speechbrain, yt-dlp,
+  python-docx y, explícitamente, `torch` y `scikit-learn`, que se usan
+  directo aunque lleguen como transitivas de sentence-transformers.
+- **Prueba negativa del hook de pre-commit** (nunca se había hecho):
+  se intentó commitear un archivo con lint en rojo y el hook **abortó** el
+  commit. De paso se documentó que pre-commit hace *stash* de lo no indexado,
+  así que commitear un subconjunto corre los tests contra un árbol incompleto.
+- 179 tests (antes 130), ruff limpio, `check.bat` en verde.
+
+**Pendiente real**: la diarización **no se ha probado con una grabación real**
+— solo con audio sintético (que no sirve para validar el umbral automático) y
+con fakes deterministas. La primera grabación real es también la calibración
+del umbral.
+
 ## 2026-07-19 — Soporte ampliado de formatos multimedia
 
 El usuario pidió que la app admitiera más formatos además de mp4 (mp3, wav,

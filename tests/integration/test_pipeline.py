@@ -152,3 +152,111 @@ def test_fallo_no_aborta_lote(con, tmp_path, fake_embedder, settings):
     repo = VideoRepo(con)
     assert repo.por_id(v_mal.video_id).processing_status == "failed"
     assert repo.por_id(v_bien.video_id).processing_status == "completed"
+
+
+class FakeDiarizador:
+    """Reparte las regiones entre N hablantes de forma determinista; puede
+    fallar a propósito para probar que el pipeline aguanta."""
+
+    def __init__(self, n_hablantes: int = 2, fallar: bool = False):
+        self.n_hablantes = n_hablantes
+        self.fallar = fallar
+        self.llamadas: list[str] = []
+
+    def diarizar(self, ruta_media, regiones, progreso=None):
+        from videoindex.domain.models import SpeakerTurn
+
+        self.llamadas.append(ruta_media)
+        if self.fallar:
+            raise RuntimeError("modelo de voz no disponible")
+        if progreso:
+            progreso(1.0)
+        return [
+            SpeakerTurn(inicio, fin, f"SPEAKER_{i % self.n_hablantes:02d}")
+            for i, (inicio, fin) in enumerate(regiones)
+        ]
+
+
+def test_pipeline_etiqueta_hablantes_en_segmentos_y_chunks(con, tmp_path, fake_embedder, settings):
+    from videoindex.infrastructure.db.repositories import ChunkRepo, SegmentRepo
+
+    v = _alta_video(con, "C:/v/dialogo.mp4", "ck-diarizado")
+    transcriptor = FakeTranscriptionProvider(_segmentos_demo("C:/v/dialogo.mp4"))
+    faiss_index = FaissIndex(tmp_path / "test.faiss", fake_embedder.dimensions)
+    diarizador = FakeDiarizador(n_hablantes=2)
+    pipeline = PipelineService(
+        con,
+        transcriptor,
+        fake_embedder,
+        FakeNERProvider(),
+        faiss_index,
+        settings,
+        diarizador,
+    )
+
+    ok, fail = pipeline.procesar_lote([v])
+    assert (ok, fail) == (1, 0)
+    assert diarizador.llamadas == ["C:/v/dialogo.mp4"]
+
+    segmentos = SegmentRepo(con).por_video(v.video_id)
+    assert [s.speaker for s in segmentos] == ["SPEAKER_00", "SPEAKER_01"]
+
+    # Cambio de hablante = frontera dura: dos chunks, uno por voz.
+    chunks = ChunkRepo(con).por_video(v.video_id)
+    assert [c.speakers for c in chunks] == [["SPEAKER_00"], ["SPEAKER_01"]]
+
+
+def test_si_la_diarizacion_falla_el_video_igual_se_completa(con, tmp_path, fake_embedder, settings):
+    """Perder las etiquetas de hablante degrada el resultado; perder una hora
+    de transcripción no es aceptable."""
+    from videoindex.infrastructure.db.repositories import SegmentRepo
+
+    v = _alta_video(con, "C:/v/roto.mp4", "ck-roto")
+    transcriptor = FakeTranscriptionProvider(_segmentos_demo("C:/v/roto.mp4"))
+    faiss_index = FaissIndex(tmp_path / "test.faiss", fake_embedder.dimensions)
+    pipeline = PipelineService(
+        con,
+        transcriptor,
+        fake_embedder,
+        FakeNERProvider(),
+        faiss_index,
+        settings,
+        FakeDiarizador(fallar=True),
+    )
+
+    ok, fail = pipeline.procesar_lote([v])
+    assert (ok, fail) == (1, 0)
+    assert VideoRepo(con).por_id(v.video_id).processing_status == "completed"
+    assert all(s.speaker is None for s in SegmentRepo(con).por_video(v.video_id))
+
+
+def test_sin_diarizador_el_pipeline_se_comporta_como_antes(con, tmp_path, fake_embedder, settings):
+    from videoindex.infrastructure.db.repositories import SegmentRepo
+
+    v = _alta_video(con, "C:/v/solo.mp4", "ck-solo")
+    transcriptor = FakeTranscriptionProvider(_segmentos_demo("C:/v/solo.mp4"))
+    pipeline, _ = _pipeline(con, tmp_path, fake_embedder, transcriptor, settings)
+
+    ok, fail = pipeline.procesar_lote([v])
+    assert (ok, fail) == (1, 0)
+    assert all(s.speaker is None for s in SegmentRepo(con).por_video(v.video_id))
+
+
+def test_la_etapa_de_diarizacion_se_reporta_a_la_interfaz(con, tmp_path, fake_embedder, settings):
+    v = _alta_video(con, "C:/v/etapas.mp4", "ck-etapas")
+    transcriptor = FakeTranscriptionProvider(_segmentos_demo("C:/v/etapas.mp4"))
+    faiss_index = FaissIndex(tmp_path / "test.faiss", fake_embedder.dimensions)
+    pipeline = PipelineService(
+        con,
+        transcriptor,
+        fake_embedder,
+        FakeNERProvider(),
+        faiss_index,
+        settings,
+        FakeDiarizador(),
+    )
+    etapas: list[str] = []
+    pipeline.procesar_lote([v], progress=lambda vid, etapa, frac: etapas.append(etapa))
+
+    assert "diarizing" in etapas
+    assert etapas.index("transcribing") < etapas.index("diarizing") < etapas.index("segmenting")

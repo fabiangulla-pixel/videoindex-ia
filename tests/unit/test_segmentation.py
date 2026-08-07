@@ -94,3 +94,39 @@ def test_resumen_local():
 
 def test_resumen_vacio():
     assert resumen_local("") == ""
+
+
+def test_cambio_de_hablante_corta_el_chunk_aunque_no_llegue_al_minimo():
+    """Un chunk que mezcla dos voces atribuye mal las citas: la frontera por
+    hablante es dura y no espera a chunk_min_s."""
+    segs = hacer_segmentos(
+        "v1",
+        [
+            ("pregunta corta", 0.0, 3.0),
+            ("respuesta larga que sigue", 3.0, 8.0),
+        ],
+    )
+    segs[0].speaker = "SPEAKER_00"
+    segs[1].speaker = "SPEAKER_01"
+    chunks = segmentar(segs, lambda ts: [[1.0, 0.0]] * len(ts), _cfg())
+    assert len(chunks) == 2
+    assert chunks[0].speakers == ["SPEAKER_00"]
+    assert chunks[1].speakers == ["SPEAKER_01"]
+
+
+def test_cortar_por_hablante_desactivado_mantiene_un_solo_chunk():
+    segs = hacer_segmentos("v1", [("a", 0.0, 3.0), ("b", 3.0, 8.0)])
+    segs[0].speaker = "SPEAKER_00"
+    segs[1].speaker = "SPEAKER_01"
+    chunks = segmentar(segs, lambda ts: [[1.0, 0.0]] * len(ts), _cfg(cortar_por_hablante=False))
+    assert len(chunks) == 1
+    assert chunks[0].speakers == ["SPEAKER_00", "SPEAKER_01"]  # orden de aparición
+
+
+def test_video_sin_diarizar_no_cambia_de_comportamiento():
+    """Con todos los speaker en None la frontera por hablante nunca dispara:
+    los videos ya procesados se segmentan igual que antes."""
+    segs = hacer_segmentos("v1", [("a", 0.0, 3.0), ("b", 3.0, 8.0)])
+    chunks = segmentar(segs, lambda ts: [[1.0, 0.0]] * len(ts), _cfg())
+    assert len(chunks) == 1
+    assert chunks[0].speakers == []

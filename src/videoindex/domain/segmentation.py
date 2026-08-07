@@ -6,7 +6,10 @@ inyectados como función, así que se testea sin cargar modelos.
 Fronteras, en orden de prioridad:
 1. Dura: pausa entre segmentos > pausa_frontera_s (el VAD ya quitó silencio,
    un gap grande sugiere cambio de tema) o chunk_max_s alcanzado.
-2. Semántica: similitud coseno entre la ventana anterior y la siguiente
+2. Dura: cambio de hablante (si el video está diarizado y cortar_por_hablante
+   está activo). No respeta chunk_min_s a propósito: un chunk que mezcla dos
+   voces atribuye mal las citas, y eso pesa más que quedarse corto.
+3. Semántica: similitud coseno entre la ventana anterior y la siguiente
    por debajo de umbral_coseno, siempre que el chunk lleve >= chunk_min_s.
 
 El texto NUNCA se modifica (SAD: "No modifica el texto. Solo reorganiza").
@@ -19,6 +22,7 @@ from collections.abc import Callable
 from uuid import uuid4
 
 from videoindex.config.settings import SegmentationSettings
+from videoindex.domain.diarization import etiquetas_en_orden
 from videoindex.domain.models import SemanticChunk, TranscriptSegment
 
 EncodeFn = Callable[[list[str]], list[list[float]]]
@@ -65,6 +69,13 @@ def segmentar(
             inicio_chunk = i + 1
             continue
 
+        # Sin diarizar, ambos speaker son None y esta condición nunca dispara:
+        # el comportamiento de los videos ya procesados no cambia.
+        if cfg.cortar_por_hablante and actual.speaker != siguiente.speaker:
+            cortes.append(i)
+            inicio_chunk = i + 1
+            continue
+
         if duracion_chunk >= cfg.chunk_min_s:
             v = cfg.ventana_segmentos
             antes = segmentos[max(inicio_chunk, i - v + 1) : i + 1]
@@ -93,6 +104,7 @@ def segmentar(
                 full_text=_texto_ventana(grupo),
                 avg_confidence=sum(confs) / len(confs),
                 segment_ids=[s.segment_id for s in grupo],
+                speakers=etiquetas_en_orden(grupo),
             )
         )
         inicio = fin + 1

@@ -17,10 +17,14 @@ def main() -> int:
 
     from PySide6.QtWidgets import QApplication
 
-    from videoindex.config.settings import cargar_preferencias_rag
+    from videoindex.config.settings import (
+        cargar_preferencias_rag,
+        cargar_preferencias_transcripcion,
+    )
     from videoindex.presentation.main_window import MainWindow
 
     cargar_preferencias_rag()
+    cargar_preferencias_transcripcion()
 
     app = QApplication(sys.argv)
     app.setApplicationName("VideoIndex IA")

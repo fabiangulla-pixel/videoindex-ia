@@ -35,12 +35,22 @@ class VideoRepo:
         return self._a_modelo(row) if row else None
 
     def guardar(self, v: Video) -> None:
+        # Los source_* usan COALESCE en el UPDATE: si el archivo ya estaba en
+        # la biblioteca por un escaneo de carpeta y ahora llega con datos de
+        # procedencia (misma grabación añadida por URL), se enriquece; un alta
+        # sin procedencia nunca borra la que ya había.
         self.con.execute(
             """INSERT INTO videos (video_id, title, path, checksum, duration_seconds,
                                    course_name, session_name, processing_status, content_start_s,
-                                   project_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(checksum) DO UPDATE SET path=excluded.path, title=excluded.title""",
+                                   project_id, source_url, source_channel, source_published_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(checksum) DO UPDATE SET
+                   path=excluded.path,
+                   title=excluded.title,
+                   source_url=COALESCE(excluded.source_url, videos.source_url),
+                   source_channel=COALESCE(excluded.source_channel, videos.source_channel),
+                   source_published_at=COALESCE(
+                       excluded.source_published_at, videos.source_published_at)""",
             (
                 v.video_id,
                 v.title,
@@ -52,6 +62,9 @@ class VideoRepo:
                 v.processing_status,
                 v.content_start_s,
                 v.project_id,
+                v.source_url,
+                v.source_channel,
+                v.source_published_at,
             ),
         )
         self.con.commit()
@@ -123,6 +136,9 @@ class VideoRepo:
             processing_status=row["processing_status"],
             content_start_s=row["content_start_s"],
             project_id=row["project_id"],
+            source_url=row["source_url"],
+            source_channel=row["source_channel"],
+            source_published_at=row["source_published_at"],
         )
 
 
@@ -153,8 +169,9 @@ class SegmentRepo:
     def guardar_lote(self, segmentos: list[TranscriptSegment]) -> None:
         self.con.executemany(
             """INSERT INTO transcript_segments
-               (segment_id, video_id, start_time, end_time, duration, raw_text, clean_text, confidence)
-               VALUES (?,?,?,?,?,?,?,?)""",
+               (segment_id, video_id, start_time, end_time, duration, raw_text, clean_text,
+                confidence, speaker)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             [
                 (
                     s.segment_id,
@@ -165,6 +182,7 @@ class SegmentRepo:
                     s.raw_text,
                     s.clean_text,
                     s.confidence,
+                    s.speaker,
                 )
                 for s in segmentos
             ],
@@ -185,6 +203,7 @@ class SegmentRepo:
                 raw_text=r["raw_text"],
                 clean_text=r["clean_text"],
                 confidence=r["confidence"],
+                speaker=r["speaker"],
             )
             for r in rows
         ]
@@ -205,8 +224,8 @@ class ChunkRepo:
             self.con.execute(
                 """INSERT INTO semantic_chunks
                    (chunk_id, video_id, start_time, end_time, full_text, summary,
-                    discourse_type, avg_confidence)
-                   VALUES (?,?,?,?,?,?,?,?)""",
+                    discourse_type, avg_confidence, speakers)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 (
                     c.chunk_id,
                     c.video_id,
@@ -216,6 +235,7 @@ class ChunkRepo:
                     c.summary,
                     c.discourse_type,
                     c.avg_confidence,
+                    ",".join(c.speakers) or None,
                 ),
             )
             self.con.executemany(
@@ -328,6 +348,7 @@ class ChunkRepo:
             summary=row["summary"] or "",
             discourse_type=row["discourse_type"],
             avg_confidence=row["avg_confidence"],
+            speakers=(row["speakers"] or "").split(",") if row["speakers"] else [],
         )
 
 
@@ -415,6 +436,57 @@ class EntityRepo:
         )
 
     def commit(self) -> None:
+        self.con.commit()
+
+
+class SpeakerRepo:
+    """Nombres reales de los hablantes de un video. La diarización produce
+    etiquetas anónimas; ponerles nombre es trabajo humano y se guarda aparte
+    de la transcripción, que es inmutable."""
+
+    def __init__(self, con: sqlite3.Connection):
+        self.con = con
+
+    def nombres(self, video_id: str) -> dict[str, str]:
+        """speaker_label -> nombre puesto por el usuario (solo los nombrados)."""
+        rows = self.con.execute(
+            "SELECT speaker_label, display_name FROM video_speakers WHERE video_id = ?",
+            (video_id,),
+        ).fetchall()
+        return {r["speaker_label"]: r["display_name"] for r in rows}
+
+    def renombrar(self, video_id: str, speaker_label: str, display_name: str) -> None:
+        """Nombre vacío = volver a la etiqueta anónima (borra la fila)."""
+        nombre = display_name.strip()
+        if not nombre:
+            self.con.execute(
+                "DELETE FROM video_speakers WHERE video_id = ? AND speaker_label = ?",
+                (video_id, speaker_label),
+            )
+        else:
+            self.con.execute(
+                """INSERT INTO video_speakers (video_id, speaker_label, display_name)
+                   VALUES (?,?,?)
+                   ON CONFLICT(video_id, speaker_label) DO UPDATE SET display_name=excluded.display_name""",
+                (video_id, speaker_label, nombre),
+            )
+        self.con.commit()
+
+    def etiquetas_detectadas(self, video_id: str) -> list[str]:
+        """Etiquetas que realmente aparecen en la transcripción, en orden de
+        primera aparición (no las de la tabla de nombres: puede haber nombres
+        viejos de un procesamiento anterior con otro número de hablantes)."""
+        rows = self.con.execute(
+            """SELECT speaker, MIN(start_time) AS primera
+               FROM transcript_segments
+               WHERE video_id = ? AND speaker IS NOT NULL
+               GROUP BY speaker ORDER BY primera""",
+            (video_id,),
+        ).fetchall()
+        return [r["speaker"] for r in rows]
+
+    def eliminar_por_video(self, video_id: str) -> None:
+        self.con.execute("DELETE FROM video_speakers WHERE video_id = ?", (video_id,))
         self.con.commit()
 
 

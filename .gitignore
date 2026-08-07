@@ -11,8 +11,13 @@ data/
 # Builds
 build/
 dist/
-*.spec
 *.egg-info/
+# Los .spec que PyInstaller autogenera son basura, pero VideoIndexIA.spec está
+# EDITADO A MANO (datas del modelo spaCy, collect_all de faster-whisper/
+# ctranslate2/faiss/speechbrain, hiddenimports). Sin él no se puede
+# reconstruir el .exe: va al repo.
+*.spec
+!VideoIndexIA.spec
 
 # Secretos
 .env

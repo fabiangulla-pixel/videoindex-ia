@@ -1,6 +1,12 @@
 """Orquestación del pipeline por video (SAD §8) — reanudable e idempotente.
 
-Video → transcribir → segmentar → NER+grafo → embeddings → indexar → completed
+Video → transcribir → diarizar → segmentar → NER+grafo → embeddings → indexar
+
+La diarización va DESPUÉS de transcribir y no antes: reutiliza los segmentos
+de Whisper como regiones de voz ya detectadas (su VAD ya corrió) en vez de
+volver a buscar dónde hay habla. Es opcional — sin diarizador el pipeline
+hace exactamente lo de siempre — y su fallo nunca tumba el video: una
+transcripción sin etiquetas de hablante sigue siendo utilizable.
 
 Reanudación: el checkpoint es el `processing_status` por video en la BD
 (patrón de ReactivosFlow adaptado: aquí la unidad de trabajo es el video y
@@ -25,9 +31,15 @@ from itertools import combinations
 
 from videoindex.config.settings import Settings
 from videoindex.domain import segmentation
+from videoindex.domain.diarization import asignar_hablantes
 from videoindex.domain.discourse import clasificar
 from videoindex.domain.models import Video
-from videoindex.domain.ports import EmbeddingProvider, NERProvider, TranscriptionProvider
+from videoindex.domain.ports import (
+    DiarizationProvider,
+    EmbeddingProvider,
+    NERProvider,
+    TranscriptionProvider,
+)
 from videoindex.infrastructure.db.repositories import (
     ChunkRepo,
     EmbeddingRepo,
@@ -52,6 +64,7 @@ class PipelineService:
         ner: NERProvider,
         faiss_index: FaissIndex,
         settings: Settings,
+        diarizador: DiarizationProvider | None = None,
     ):
         self.con = con
         self.videos = VideoRepo(con)
@@ -60,6 +73,7 @@ class PipelineService:
         self.entidades = EntityRepo(con)
         self.emb_repo = EmbeddingRepo(con)
         self.transcriptor = transcriptor
+        self.diarizador = diarizador
         self.embedder = embedder
         self.ner = ner
         self.faiss = faiss_index
@@ -115,6 +129,8 @@ class PipelineService:
         )
         if not segs:
             raise ValueError("La transcripción no produjo segmentos (¿audio vacío?)")
+
+        self._diarizar(video, segs, avisar)
         self.segmentos.guardar_lote(segs)
 
         avisar("segmenting")
@@ -157,6 +173,33 @@ class PipelineService:
 
         self.videos.actualizar_estado(video.video_id, "completed")
         avisar("completed")
+
+    def _diarizar(self, video: Video, segs: list, avisar: Callable[..., None]) -> None:
+        """Etiqueta cada segmento con su hablante, si hay diarizador.
+
+        Muta `segs` ANTES de persistirlos (una sola escritura, sin UPDATE
+        posterior). Un fallo aquí se registra y se sigue: perder las
+        etiquetas de hablante degrada el resultado, perder la transcripción
+        entera de una hora de audio no es aceptable.
+        """
+        if self.diarizador is None:
+            return
+        # Solo se avisa la etapa a la UI; el processing_status persistido se
+        # queda en 'transcribing'. Añadir 'diarizing' obligaría a reconstruir
+        # la tabla videos entera (su CHECK enumera los estados válidos y
+        # SQLite no permite alterarlo), y para la reanudación da igual: lo
+        # único que importa es que el video no esté 'completed'.
+        avisar("diarizing")
+        try:
+            regiones = [(s.start_time, s.end_time) for s in segs]
+            turnos = self.diarizador.diarizar(
+                video.path, regiones, lambda f: avisar("diarizing", f)
+            )
+            asignar_hablantes(segs, turnos)
+            n = len({t.speaker for t in turnos})
+            log.info("video_id=%s hablantes_detectados=%d", video.video_id, n)
+        except Exception:
+            log.exception("Diarización fallida en %s; sigue sin hablantes", video.title)
 
     def _limpiar_derivados(self, video_id: str) -> None:
         """Re-proceso idempotente: fuera chunks/vectores/segmentos previos."""

@@ -14,6 +14,7 @@ from videoindex.infrastructure.db.repositories import (
     EmbeddingRepo,
     EntityRepo,
     SegmentRepo,
+    SpeakerRepo,
     VideoRepo,
 )
 
@@ -41,6 +42,7 @@ class VideoDeletionService:
         self.entities = EntityRepo(con)
         self.embeddings = EmbeddingRepo(con)
         self.annotations = AnnotationRepo(con)
+        self.speakers = SpeakerRepo(con)
         self.embedder = embedder
         self.faiss_index = faiss_index
 
@@ -70,6 +72,7 @@ class VideoDeletionService:
 
         self.entities.eliminar_por_video(video_id)
         self.annotations.eliminar_por_video(video_id)
+        self.speakers.eliminar_por_video(video_id)
         self.chunks.borrar_por_video(video_id)  # también limpia chunks_fts (trigger)
         self.segments.borrar_por_video(video_id)
         self.videos.eliminar(video_id)

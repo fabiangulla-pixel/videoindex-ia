@@ -24,6 +24,7 @@ from videoindex.application.time_estimator import TimeEstimator
 from videoindex.config.settings import SETTINGS
 from videoindex.presentation.dossier_view import DossierConfirmDialog, DossierResultDialog
 from videoindex.presentation.workers import (
+    DescargaWorker,
     DossierGenerarWorker,
     DossierRecopilarWorker,
     EliminarVideoWorker,
@@ -35,6 +36,8 @@ from videoindex.presentation.workers import (
 _ETIQUETAS_ESTADO = {
     "pending": "⏳ pendiente",
     "transcribing": "🎙 transcribiendo",
+    # Etapa de progreso, no estado persistido (ver PipelineService._diarizar).
+    "diarizing": "🗣 separando voces",
     "segmenting": "✂ segmentando",
     "extracting": "🏷 entidades",
     "indexing": "📇 indexando",
@@ -50,6 +53,11 @@ class LibraryView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.boton_agregar = QPushButton("📂 Agregar carpeta…")
+        self.boton_url = QPushButton("🌐 Añadir desde URL…")
+        self.boton_url.setToolTip(
+            "Baja la pista de audio de un video de YouTube (u otro sitio) y lo "
+            "añade a la biblioteca con su título, canal y fecha reales"
+        )
         self.boton_continuar = QPushButton("▶ Continuar procesando")
         self.boton_continuar.setVisible(False)  # solo si hay pendientes (ver refrescar())
         self.boton_exportar = QPushButton("📦 Exportar corpus…")
@@ -85,6 +93,7 @@ class LibraryView(QWidget):
 
         barra = QHBoxLayout()
         barra.addWidget(self.boton_agregar)
+        barra.addWidget(self.boton_url)
         barra.addWidget(self.boton_continuar)
         barra.addWidget(self.boton_exportar)
         barra.addWidget(self.boton_exportar_okf)
@@ -98,12 +107,14 @@ class LibraryView(QWidget):
         layout.addWidget(self.log)
 
         self.boton_agregar.clicked.connect(self._agregar_carpeta)
+        self.boton_url.clicked.connect(self._agregar_desde_url)
         self.boton_continuar.clicked.connect(self.continuar_procesando)
         self.boton_exportar.clicked.connect(self._exportar_corpus_proyecto)
         self.boton_exportar_okf.clicked.connect(self._exportar_okf_proyecto)
         self._worker = None
         self._worker_dossier = None  # flujo independiente de la ingesta
         self._worker_eliminar = None  # flujo independiente de la ingesta
+        self._dialogo_transcripcion = None  # ventana no-modal: hay que retenerla
         # Mismo sentinel que VideoRepo.listar(project_id=...): "__todos__" no
         # filtra, None filtra por "sin proyecto", cualquier otro string es
         # un project_id real.
@@ -182,6 +193,8 @@ class LibraryView(QWidget):
         tiene_proyecto = proyecto_item is not None and proyecto_item.text() != "—"
 
         menu = QMenu(self)
+        accion_transcripcion = menu.addAction("🗣 Transcripción y hablantes…")
+        accion_transcripcion.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
         accion_dossier = menu.addAction("📄 Generar dossier del video…")
         # Sin chunks (video no completado) no hay nada que agrupar por entidad.
         accion_dossier.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
@@ -200,7 +213,9 @@ class LibraryView(QWidget):
         accion_desasignar.setEnabled(tiene_proyecto)
         accion_eliminar = menu.addAction("🗑 Eliminar de la biblioteca…")
         elegida = menu.exec(self.tabla.viewport().mapToGlobal(pos))
-        if elegida == accion_dossier:
+        if elegida == accion_transcripcion:
+            self._abrir_transcripcion(video_id, item_titulo.text(), _ruta)
+        elif elegida == accion_dossier:
             self._iniciar_dossier(video_id, item_titulo.text())
         elif elegida == accion_recortar:
             self._recortar_video(video_id, _ruta, item_titulo.text())
@@ -212,6 +227,22 @@ class LibraryView(QWidget):
             self._desasignar_proyecto(video_id)
         elif elegida == accion_eliminar:
             self._confirmar_eliminar(video_id, item_titulo.text())
+
+    def _abrir_transcripcion(self, video_id: str, titulo: str, ruta: str) -> None:
+        """La ventana de transcripción es no-modal a propósito: se usa CONTRA
+        el reproductor (doble clic en una intervención salta a ese minuto para
+        verificarla de oído), así que ambos tienen que estar vivos a la vez."""
+        from videoindex.presentation.transcript_dialog import TranscriptDialog
+
+        dialogo = TranscriptDialog(video_id, titulo, self)
+        dialogo.setModal(False)
+        dialogo.saltar_a.connect(
+            lambda segundo: self.abrir_video.emit(ruta, titulo, segundo, video_id)
+        )
+        dialogo.show()
+        # Sin esta referencia el diálogo no-modal se destruiría al salir del
+        # método (queda sin dueño fuerte en Python) y desaparecería solo.
+        self._dialogo_transcripcion = dialogo
 
     def _exportar_corpus_video(self, video_id: str, titulo: str) -> None:
         from videoindex.application.export_service import exportar_video_json
@@ -451,6 +482,53 @@ class LibraryView(QWidget):
         self._worker.fallo.connect(self._error)
         self._worker.start()
 
+    def _agregar_desde_url(self):
+        if self._worker is not None and self._worker.isRunning():
+            return  # guardia: ya hay un escaneo/descarga/lote en curso
+        from videoindex.presentation.url_dialog import UrlDialog
+
+        dialogo = UrlDialog(self)
+        if dialogo.exec() != UrlDialog.DialogCode.Accepted:
+            return
+        urls = dialogo.urls()
+        if not urls:
+            return
+
+        self.etiqueta_estado.setText(f"Descargando {len(urls)} URL(s)…")
+        self._registrar(f"Descarga desde URL: {len(urls)} enlace(s)")
+        self.boton_url.setEnabled(False)  # guardia anti-doble-clic
+        self.boton_agregar.setEnabled(False)
+        self.progreso.setVisible(True)
+        self.progreso.setRange(0, 0)  # yt-dlp no siempre sabe el total: indeterminada
+        self._worker = DescargaWorker(urls, project_id=self.proyecto_para_ingesta)
+        self._worker.progreso.connect(self._on_progreso_descarga)
+        self._worker.terminado.connect(self._on_descargado)
+        self._worker.fallo.connect(self._error)
+        self._worker.start()
+
+    def _on_progreso_descarga(self, indice: int, total: int, mensaje: str):
+        self.etiqueta_estado.setText(f"[{indice}/{total}] {mensaje}")
+
+    def _on_descargado(self, resultado, errores: list):
+        self.boton_url.setEnabled(True)
+        self.progreso.setVisible(False)
+        for error in errores:
+            self._registrar(f"ERROR descargando — {error}")
+        for video in resultado.nuevos:
+            self._registrar(f"Descargado y añadido: «{video.title}»")
+        if errores and not resultado.por_procesar:
+            self.boton_agregar.setEnabled(True)
+            self.etiqueta_estado.setText("Ninguna descarga se pudo completar.")
+            QMessageBox.warning(self, "Descarga desde URL", "\n\n".join(errores))
+            return
+        if errores:
+            QMessageBox.warning(
+                self,
+                "Descarga desde URL",
+                "Algunas URLs fallaron; el resto sí se descargó:\n\n" + "\n\n".join(errores),
+            )
+        self._confirmar_lote(resultado)
+
     def _on_progreso_escaneo(self, indice: int, total: int, nombre: str):
         self.progreso.setRange(0, total)
         self.progreso.setValue(indice)
@@ -465,6 +543,7 @@ class LibraryView(QWidget):
             self.etiqueta_estado.setText("Nada nuevo que procesar.")
             self._registrar("Escaneo terminado: nada nuevo que procesar.")
             self.boton_agregar.setEnabled(True)
+            self.boton_url.setEnabled(True)
             return
         self._confirmar_y_procesar(por_procesar)
 
@@ -489,15 +568,25 @@ class LibraryView(QWidget):
         """Compartido por 'Agregar carpeta' (tras escanear) y 'Continuar
         procesando' (sobre lo ya pendiente en la biblioteca, sin re-escanear
         ninguna carpeta): mismo diálogo de ETA/costo y el mismo PipelineWorker."""
-        estimador = TimeEstimator(SETTINGS.transcription.factor_tiempo_inicial)
+        from videoindex.config.settings import factor_tiempo
+
+        diarizacion = SETTINGS.diarization.activa
+        estimador = TimeEstimator(factor_tiempo(SETTINGS.transcription.modelo, diarizacion))
         horas = sum(v.duration_seconds or 0.0 for v in videos) / 3600
         eta = estimador.eta_lote([v.duration_seconds or 0 for v in videos])
+        if diarizacion:
+            cuantos = SETTINGS.diarization.n_hablantes
+            hablantes = f"{cuantos} hablantes fijos" if cuantos else "número automático"
+            linea_voces = f"Separación de voces: sí ({hablantes})\n"
+        else:
+            linea_voces = "Separación de voces: no (actívala en Configuración)\n"
         detalle = (
             f"Videos por procesar: {len(videos)}\n"
             f"Material: {horas:.1f} horas\n\n"
-            f"Costo API: $0 (transcripción y embeddings 100% locales)\n"
+            f"Costo API: $0 (transcripción, voces y embeddings 100% locales)\n"
             f"Tiempo estimado: ~{TimeEstimator.humano(eta)} "
-            f"(whisper {SETTINGS.transcription.modelo}, CPU)\n\n"
+            f"(whisper {SETTINGS.transcription.modelo}, CPU)\n"
+            f"{linea_voces}\n"
             "¿Procesar ahora? Puedes cerrar la app a mitad: al relanzar se reanuda."
         )
         if (
@@ -506,6 +595,7 @@ class LibraryView(QWidget):
         ):
             self.etiqueta_estado.setText("Lote registrado como pendiente (no procesado).")
             self.boton_agregar.setEnabled(True)
+            self.boton_url.setEnabled(True)
             return
 
         self.progreso.setVisible(True)
@@ -536,10 +626,12 @@ class LibraryView(QWidget):
         self.etiqueta_estado.setText(f"Lote terminado: {ok} completados, {fail} fallidos.")
         self._registrar(f"Lote terminado: {ok} completados, {fail} fallidos.")
         self.boton_agregar.setEnabled(True)
+        self.boton_url.setEnabled(True)
         self.refrescar()
 
     def _error(self, mensaje: str):
         self.progreso.setVisible(False)
         self.boton_agregar.setEnabled(True)
+        self.boton_url.setEnabled(True)
         self._registrar(f"ERROR: {mensaje}")
         QMessageBox.critical(self, "Error", mensaje)

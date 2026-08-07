@@ -12,6 +12,20 @@ dependencies = [
     "keyring",
     "av",
     "numpy",
+    # Diarización (quién habla): embeddings de voz ECAPA + agrupamiento.
+    # speechbrain arrastra torchaudio; en esta máquina convive sin problema
+    # con el torch que ya trae sentence-transformers (2.12 + torchaudio 2.11).
+    "speechbrain",
+    # torch y scikit-learn llegan como dependencia transitiva de
+    # sentence-transformers, pero aquí se usan DIRECTAMENTE (tensores de la
+    # diarización y AgglomerativeClustering): se declaran para no depender
+    # de que otro paquete siga arrastrándolos.
+    "torch",
+    "scikit-learn",
+    # Descarga de material desde una URL (YouTube y ~1800 sitios más).
+    "yt-dlp",
+    # Exportación de la transcripción a Word para el trabajo editorial.
+    "python-docx",
 ]
 
 [project.optional-dependencies]
