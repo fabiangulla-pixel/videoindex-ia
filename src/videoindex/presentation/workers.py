@@ -88,10 +88,11 @@ class DescargaWorker(QThread):
     terminado = Signal(object, list)  # ResultadoIngesta, list[str] de errores
     fallo = Signal(str)
 
-    def __init__(self, urls: list[str], project_id: str | None = None):
+    def __init__(self, urls: list[str], project_id: str | None = None, con_imagen: bool = False):
         super().__init__()
         self.urls = urls
         self.project_id = project_id
+        self.con_imagen = con_imagen
 
     def run(self):
         con = None
@@ -113,6 +114,7 @@ class DescargaWorker(QThread):
                         url,
                         paths.DESCARGAS_DIR,
                         lambda f, texto, i=i: self.progreso.emit(i, len(self.urls), texto),
+                        con_imagen=self.con_imagen,
                     )
                 except Exception as exc:
                     # Una URL rota no puede tumbar el resto del lote (mismo

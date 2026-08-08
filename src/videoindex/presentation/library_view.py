@@ -639,7 +639,9 @@ class LibraryView(QWidget):
         self.boton_agregar.setEnabled(False)
         self.progreso.setVisible(True)
         self.progreso.setRange(0, 0)  # yt-dlp no siempre sabe el total: indeterminada
-        self._worker = DescargaWorker(urls, project_id=self.proyecto_para_ingesta)
+        self._worker = DescargaWorker(
+            urls, project_id=self.proyecto_para_ingesta, con_imagen=dialogo.con_imagen()
+        )
         self._worker.progreso.connect(self._on_progreso_descarga)
         self._worker.terminado.connect(self._on_descargado)
         self._worker.fallo.connect(self._error)

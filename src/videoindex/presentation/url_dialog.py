@@ -9,6 +9,7 @@ mal pegada.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QLabel,
@@ -42,11 +43,20 @@ class UrlDialog(QDialog):
         self._estado = QLabel("")
         self._estado.setWordWrap(True)
 
+        self._con_imagen = QCheckBox(
+            "Descargar también la imagen (necesaria para identificar hablantes por los rótulos)"
+        )
+        self._con_imagen.setToolTip(
+            "Sin imagen no se pueden leer los rótulos sobreimpresos, que es de donde "
+            "sale el nombre real de cada voz. Pesa más y tarda más en bajar."
+        )
+
         explicacion = QLabel(
-            "Se baja <b>solo la pista de audio</b> (más rápido y suficiente para "
-            "transcribir). El archivo queda en <code>data/descargas</code> y entra "
-            "a la biblioteca con su título, canal y fecha de publicación reales, "
-            "que son los datos que hacen falta para citar la fuente."
+            "Por defecto se baja <b>solo la pista de audio</b>: es más rápido y "
+            "suficiente para transcribir y buscar. El archivo queda en "
+            "<code>data/descargas</code> y entra a la biblioteca con su título, canal "
+            "y fecha de publicación reales, que son los datos que hacen falta para "
+            "citar la fuente."
         )
         explicacion.setWordWrap(True)
 
@@ -64,6 +74,7 @@ class UrlDialog(QDialog):
         layout.addWidget(QLabel("<b>URLs del material:</b>"))
         layout.addWidget(self._urls)
         layout.addWidget(self._estado)
+        layout.addWidget(self._con_imagen)
         layout.addWidget(explicacion)
         layout.addWidget(permisos)
         layout.addWidget(self._botones)
@@ -78,6 +89,9 @@ class UrlDialog(QDialog):
             if es_url(limpia) and limpia not in vistas:
                 vistas.append(limpia)
         return vistas
+
+    def con_imagen(self) -> bool:
+        return self._con_imagen.isChecked()
 
     def _validar(self) -> None:
         lineas = [x.strip() for x in self._urls.toPlainText().splitlines() if x.strip()]

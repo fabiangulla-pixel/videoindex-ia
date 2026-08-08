@@ -45,6 +45,20 @@ LOTE = 8
 
 @lru_cache(maxsize=1)
 def _codificador(nombre_modelo: str):
+    # ORDEN DE IMPORTACIÓN, no es decorativo: hay que cargar torch._dynamo
+    # ANTES que speechbrain.
+    #
+    # speechbrain declara módulos perezosos para sus integraciones opcionales
+    # (k2, que no está instalado). Al importar torch._dynamo se recorre
+    # sys.modules mirando atributos de cada módulo cargado, y ese recorrido
+    # despierta el módulo perezoso, que revienta con "Please install k2".
+    #
+    # Solo se manifiesta cuando la diarización corre ANTES que los embeddings
+    # de texto en el mismo proceso — es decir, en la app real (los scripts
+    # sueltos no lo veían). Bug real: el pipeline completo fallaba en la
+    # etapa de segmentación, después de diarizar bien, con un error que no
+    # mencionaba ni a speechbrain ni a la diarización.
+    import torch._dynamo  # noqa: F401
     from speechbrain.inference.speaker import EncoderClassifier
     from speechbrain.utils.fetching import LocalStrategy
 

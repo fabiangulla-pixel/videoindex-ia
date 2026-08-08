@@ -50,8 +50,18 @@ def descargar_audio(
     url: str,
     carpeta_destino: str | Path,
     progreso: Callable[[float, str], None] | None = None,
+    con_imagen: bool = False,
 ) -> MediaDescargado:
-    """Baja la pista de audio de `url` a `carpeta_destino`.
+    """Baja `url` a `carpeta_destino`: solo el audio, o audio + imagen.
+
+    `con_imagen=True` hace falta para poder leer después los rótulos
+    sobreimpresos e identificar a los hablantes por su nombre — sin imagen no
+    hay nada que leer. Pesa bastante más y tarda más en bajar.
+
+    En ese modo se pide un stream **progresivo** (audio y video ya juntos en
+    un archivo) en vez del mejor de cada tipo por separado: unir dos pistas
+    exige ffmpeg instalado, y aquí no se da por supuesto. El precio es una
+    resolución algo menor, suficiente para un rótulo.
 
     progreso(fraccion 0..1, texto): yt-dlp no siempre conoce el tamaño total
     (streams sin Content-Length), así que la fracción puede quedarse en 0
@@ -73,8 +83,15 @@ def descargar_audio(
         elif d.get("status") == "finished":
             progreso(1.0, "Descarga terminada, verificando…")
 
+    # Con imagen: se exige un stream que ya traiga las dos pistas juntas
+    # (acodec y vcodec presentes), para no depender de ffmpeg al unirlas.
+    formato = (
+        "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best"
+        if con_imagen
+        else "bestaudio[ext=m4a]/bestaudio/best"
+    )
     opciones = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "format": formato,
         "outtmpl": str(carpeta / "%(title).120B [%(id)s].%(ext)s"),
         "noplaylist": True,
         "quiet": True,
