@@ -75,7 +75,11 @@ def cargar():
 
 def main() -> int:
     from videoindex.application.entrega_editorial import Contexto, generar_paquete
-    from videoindex.application.identificacion_service import identificar, interpretar_cita
+    from videoindex.application.identificacion_service import (
+        detectar_inicio_creditos,
+        identificar,
+        interpretar_cita,
+    )
     from videoindex.domain.diarization import asignar_hablantes
     from videoindex.infrastructure.media.probe import duracion_segundos
 
@@ -84,12 +88,14 @@ def main() -> int:
 
     identidades = identificar(turnos, rotulos, crudos)
     citas = [c for r in rotulos if (c := interpretar_cita(r)) is not None]
+    duracion = duracion_segundos(VIDEO) or 0.0
+    fin_contenido = detectar_inicio_creditos(rotulos, duracion)
 
     audio = next(TRABAJO.glob("*.m4a"))
     contexto = Contexto(
         titulo=TITULO,
         archivo=audio.name,
-        duracion_s=duracion_segundos(VIDEO) or 0.0,
+        duracion_s=duracion,
         url=URL,
         canal=CANAL,
         modelo_transcripcion="faster-whisper large-v3-turbo (CPU, int8)",
@@ -102,7 +108,9 @@ def main() -> int:
         ],
     )
 
-    salidas = generar_paquete(RESULTADO, contexto, segmentos, identidades, citas, len(rotulos))
+    salidas = generar_paquete(
+        RESULTADO, contexto, segmentos, identidades, citas, len(rotulos), fin_contenido
+    )
 
     print(f"\nDuración procesada: {contexto.duracion_s / 60:.1f} min")
     print(f"Voces distinguidas: {len(identidades)}")

@@ -67,16 +67,25 @@ class DiarizationSettings:
     # Distancia coseno bajo la cual dos tramos se consideran la misma voz.
     # Solo se usa en modo automático (n_hablantes = 0).
     #
-    # De dónde sale 0.65: speechbrain considera "mismo hablante" una
-    # similitud coseno >= 0.25 (threshold por defecto de verify_batch), o
-    # sea distancia <= 0.75; se baja a 0.65 porque el enlace promedio del
-    # agrupamiento compara grupos, no pares sueltos, y tiende a fundir.
+    # CALIBRADO con material real (documental de 54 min, 511 tramos de habla,
+    # 8 personas identificadas por sus rótulos). Barrido midiendo los dos
+    # errores posibles:
     #
-    # SIN CALIBRAR CON GRABACIONES REALES: es un punto de partida tomado de
-    # la convención de la librería, no una medición sobre este material.
-    # Subirlo funde voces distintas; bajarlo inventa hablantes de más. Si
-    # sabes cuántas personas hablan, fijar n_hablantes evita este umbral.
-    umbral_distancia: float = 0.65
+    #   umbral  voces  personas fundidas  voces anónimas de +1 min
+    #    0.65     15          0                     3
+    #    0.75     13          0                     2
+    #    0.80      9          2  <-- aparece la fusión
+    #    0.85      5          3
+    #
+    # Se elige 0.75: es el último valor sin FUSIÓN. Los dos errores no
+    # cuestan lo mismo — partir una voz en dos deja a alguien sin nombre y se
+    # arregla a mano en un minuto, mientras que fundir dos personas le
+    # atribuye a una lo que dijo la otra, y eso en un texto publicado es una
+    # cita falsa. Ante la duda, se prefiere fragmentar.
+    #
+    # Si sabes cuántas personas hablan, fijar n_hablantes es más fiable que
+    # cualquier umbral.
+    umbral_distancia: float = 0.75
     # Tramos más cortos que esto no dan un embedding de voz confiable: se
     # dejan sin etiqueta y heredan el hablante del tramo anterior.
     duracion_minima_s: float = 0.6

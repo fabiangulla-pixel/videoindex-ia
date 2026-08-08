@@ -31,6 +31,7 @@ from pathlib import Path
 
 from videoindex.application.identificacion_service import CitaEnPantalla, Identidad
 from videoindex.application.transcript_export_service import ADVERTENCIA, marca_tiempo
+from videoindex.domain.alucinaciones import es_alucinacion_probable
 from videoindex.domain.diarization import Intervencion, agrupar_intervenciones
 from videoindex.domain.limpieza import limpiar_para_lectura
 from videoindex.domain.models import TranscriptSegment
@@ -111,11 +112,30 @@ def construir_intervenciones(
     utiles = (
         [s for s in segmentos if s.start_time < fin_contenido_s]
         if fin_contenido_s is not None
-        else segmentos
+        else list(segmentos)
     )
-    return agrupar_intervenciones(
+    intervenciones = agrupar_intervenciones(
         utiles, pausa_maxima_s=PAUSA_PARRAFO_S, duracion_maxima_s=DURACION_PARRAFO_S
     )
+    # Se filtra sobre la intervención ya montada, no sobre el segmento suelto:
+    # la coletilla suele venir troceada y solo se reconoce entera.
+    return [i for i in intervenciones if not es_alucinacion_probable(i.texto)]
+
+
+def alucinaciones_descartadas(
+    segmentos: list[TranscriptSegment], fin_contenido_s: float | None = None
+) -> list[Intervencion]:
+    """Las intervenciones que se dejaron fuera por parecer inventadas por el
+    modelo. Van a `incertidumbres.md`: nada se descarta en silencio."""
+    utiles = (
+        [s for s in segmentos if s.start_time < fin_contenido_s]
+        if fin_contenido_s is not None
+        else list(segmentos)
+    )
+    todas = agrupar_intervenciones(
+        utiles, pausa_maxima_s=PAUSA_PARRAFO_S, duracion_maxima_s=DURACION_PARRAFO_S
+    )
+    return [i for i in todas if es_alucinacion_probable(i.texto)]
 
 
 # --------------------------------------------------------------------------
@@ -368,6 +388,7 @@ def escribir_incertidumbres(
     identidades: list[Identidad],
     citas: Sequence[CitaEnPantalla],
     segmentos: list[TranscriptSegment],
+    descartadas: Sequence[Intervencion] = (),
 ) -> tuple[Path, int]:
     """Solo lo que necesita decisión humana. Devuelve también cuántos asuntos
     hay: un documento de incertidumbres que nadie cuenta no sirve de nada."""
@@ -428,6 +449,23 @@ def escribir_incertidumbres(
                 "reconocimiento de voz no puede deducir de la entonación.",
                 "",
             ]
+
+    if descartadas:
+        lineas += [
+            "## Pasajes omitidos por parecer inventados por el modelo",
+            "",
+            "Whisper rellena los tramos sin habla (música, silencio, créditos) con "
+            "coletillas de subtítulos de YouTube o repitiendo una frase en bucle. "
+            "Estos pasajes **no están** en la transcripción; se listan aquí para que "
+            "puedas comprobarlo en el audio y recuperarlos si alguno era real.",
+            "",
+        ]
+        for intervencion in descartadas:
+            asuntos += 1
+            lineas.append(
+                f"- **{marca_tiempo(intervencion.start_time)}**: «{intervencion.texto[:160]}»"
+            )
+        lineas.append("")
 
     peores = sorted(
         (s for s in segmentos if s.confidence < CONFIANZA_DUDOSA), key=lambda s: s.confidence
@@ -560,8 +598,14 @@ def generar_paquete(
         carpeta / "participantes_identificados.xlsx", identidades
     )
     salidas["citas"] = escribir_citas(carpeta / "citas_literarias.xlsx", citas)
+    descartadas = alucinaciones_descartadas(segmentos, fin_contenido_s)
+    if descartadas:
+        contexto.notas.append(
+            f"{len(descartadas)} pasaje(s) omitido(s) por parecer alucinación del "
+            "modelo; se listan en incertidumbres.md"
+        )
     salidas["incertidumbres"], asuntos = escribir_incertidumbres(
-        carpeta / "incertidumbres.md", identidades, citas, segmentos
+        carpeta / "incertidumbres.md", identidades, citas, segmentos, descartadas
     )
     contexto.notas.append(f"{asuntos} asuntos consignados en incertidumbres.md")
     salidas["proceso"] = escribir_proceso_tecnico(

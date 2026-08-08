@@ -77,7 +77,7 @@ class EcapaDiarizationProvider:
         self,
         modelo: str = MODELO_ECAPA,
         n_hablantes: int = 0,
-        umbral_distancia: float = 0.65,
+        umbral_distancia: float = 0.75,
         duracion_minima_s: float = 0.6,
     ):
         self.modelo = modelo
