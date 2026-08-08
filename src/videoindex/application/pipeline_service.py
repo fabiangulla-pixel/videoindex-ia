@@ -54,6 +54,11 @@ log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str, str, float], None]  # (video_id, etapa, fraccion_lote)
 
+# Cada cuántos segmentos se vuelca la transcripción a la BD. Con ~5 s por
+# segmento, 25 son unos dos minutos de audio: es lo máximo que se pierde si
+# la máquina se suspende o se cierra la app a mitad.
+LOTE_SEGMENTOS = 25
+
 
 class PipelineService:
     def __init__(
@@ -78,6 +83,7 @@ class PipelineService:
         self.ner = ner
         self.faiss = faiss_index
         self.settings = settings
+        self._pendientes: list = []  # buffer de segmentos aún sin volcar
 
     def procesar_lote(
         self,
@@ -116,7 +122,10 @@ class PipelineService:
                 # diferencia; el resto avisa siempre con fraccion_interna=0).
                 progress(video.video_id, etapa, fraccion + fraccion_interna / n_videos)
 
-        self._limpiar_derivados(video.video_id)
+        # Punto de reanudación ANTES de limpiar nada: si hay transcripción a
+        # medias de un intento interrumpido, se conserva y se sigue desde ahí.
+        reanudar_desde = self.segmentos.ultimo_instante(video.video_id)
+        self._limpiar_derivados(video.video_id, conservar_segmentos=reanudar_desde > 0)
 
         avisar("detecting_offset")
         offset = detectar_inicio_contenido(video.path)
@@ -124,14 +133,27 @@ class PipelineService:
 
         avisar("transcribing")
         self.videos.actualizar_estado(video.video_id, "transcribing")
-        segs = self.transcriptor.transcribir(
-            video.path, video.video_id, lambda f: avisar("transcribing", f)
+        if reanudar_desde > 0:
+            log.info(
+                "video_id=%s reanudando transcripción desde %.1fs", video.video_id, reanudar_desde
+            )
+        self.transcriptor.transcribir(
+            video.path,
+            video.video_id,
+            lambda f: avisar("transcribing", f),
+            desde_s=reanudar_desde,
+            al_segmento=self._guardar_incremental,
         )
+        self._vaciar_pendientes()
+
+        # Desde la BD, no desde lo que acaba de devolver el transcriptor: en
+        # una reanudación hay que juntar lo viejo con lo nuevo.
+        segs = self.segmentos.por_video(video.video_id)
         if not segs:
             raise ValueError("La transcripción no produjo segmentos (¿audio vacío?)")
 
         self._diarizar(video, segs, avisar)
-        self.segmentos.guardar_lote(segs)
+        self.segmentos.actualizar_hablantes(segs)
 
         avisar("segmenting")
         self.videos.actualizar_estado(video.video_id, "segmenting")
@@ -174,6 +196,23 @@ class PipelineService:
         self.videos.actualizar_estado(video.video_id, "completed")
         avisar("completed")
 
+    def _guardar_incremental(self, segmento) -> None:
+        """Acumula segmentos y los vuelca cada LOTE_SEGMENTOS.
+
+        No se guarda uno a uno (un commit por segmento son cientos de
+        escrituras) ni todo al final (una hora de CPU perdida si el proceso
+        muere a mitad). El lote es el término medio: se pierde, como mucho,
+        el último minuto de trabajo.
+        """
+        self._pendientes.append(segmento)
+        if len(self._pendientes) >= LOTE_SEGMENTOS:
+            self._vaciar_pendientes()
+
+    def _vaciar_pendientes(self) -> None:
+        if self._pendientes:
+            self.segmentos.guardar_lote(self._pendientes)
+            self._pendientes = []
+
     def _diarizar(self, video: Video, segs: list, avisar: Callable[..., None]) -> None:
         """Etiqueta cada segmento con su hablante, si hay diarizador.
 
@@ -201,8 +240,15 @@ class PipelineService:
         except Exception:
             log.exception("Diarización fallida en %s; sigue sin hablantes", video.title)
 
-    def _limpiar_derivados(self, video_id: str) -> None:
-        """Re-proceso idempotente: fuera chunks/vectores/segmentos previos."""
+    def _limpiar_derivados(self, video_id: str, conservar_segmentos: bool = False) -> None:
+        """Re-proceso idempotente: fuera chunks/vectores/segmentos previos.
+
+        `conservar_segmentos` es lo que hace posible reanudar: los chunks y
+        los vectores SIEMPRE se rehacen (dependen de la transcripción
+        completa), pero la transcripción parcial ya pagada con minutos de CPU
+        no se toca. Sin esta distinción, el borrado idempotente destruía
+        justo el trabajo que se quería continuar.
+        """
         chunk_ids = [
             r["chunk_id"]
             for r in self.con.execute(
@@ -219,4 +265,5 @@ class PipelineService:
                 self.faiss.save()
                 self.emb_repo.borrar_mapeos(row["version_id"], chunk_ids)
         self.chunks.borrar_por_video(video_id)
-        self.segmentos.borrar_por_video(video_id)
+        if not conservar_segmentos:
+            self.segmentos.borrar_por_video(video_id)

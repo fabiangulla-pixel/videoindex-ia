@@ -260,3 +260,109 @@ def test_la_etapa_de_diarizacion_se_reporta_a_la_interfaz(con, tmp_path, fake_em
 
     assert "diarizing" in etapas
     assert etapas.index("transcribing") < etapas.index("diarizing") < etapas.index("segmenting")
+
+
+def _segmentos_largos(ruta: str, cuantos: int = 60):
+    """Una transcripción larga, para poder cortarla por la mitad."""
+    return {
+        ruta: hacer_segmentos(
+            "",
+            [
+                (f"Frase número {i} del material grabado", i * 10.0, i * 10.0 + 8.0)
+                for i in range(cuantos)
+            ],
+        )
+    }
+
+
+def test_la_transcripcion_se_guarda_mientras_avanza(con, tmp_path, fake_embedder, settings):
+    """Sin guardado incremental, una hora de CPU se pierde entera si el
+    proceso muere; con él, lo ya transcrito queda en la BD."""
+    from videoindex.infrastructure.db.repositories import SegmentRepo
+
+    v = _alta_video(con, "C:/v/largo.mp4", "ck-largo")
+    transcriptor = FakeTranscriptionProvider(_segmentos_largos("C:/v/largo.mp4"), morir_tras=40)
+    pipeline, _ = _pipeline(con, tmp_path, fake_embedder, transcriptor, settings)
+
+    ok, fail = pipeline.procesar_lote([v])
+    assert (ok, fail) == (0, 1)  # el video falla...
+
+    # ...pero lo transcrito antes del corte sobrevivió (múltiplos del lote).
+    guardados = SegmentRepo(con).por_video(v.video_id)
+    assert len(guardados) >= 25
+    assert SegmentRepo(con).ultimo_instante(v.video_id) > 0
+
+
+def test_reanuda_desde_donde_se_corto_sin_repetir_lo_hecho(con, tmp_path, fake_embedder, settings):
+    from videoindex.infrastructure.db.repositories import SegmentRepo
+
+    v = _alta_video(con, "C:/v/largo.mp4", "ck-reanuda")
+    segmentos = _segmentos_largos("C:/v/largo.mp4")
+
+    # Primer intento: se corta.
+    primero = FakeTranscriptionProvider(segmentos, morir_tras=40)
+    pipeline, _ = _pipeline(con, tmp_path, fake_embedder, primero, settings)
+    pipeline.procesar_lote([v])
+    parciales = len(SegmentRepo(con).por_video(v.video_id))
+    corte = SegmentRepo(con).ultimo_instante(v.video_id)
+    assert primero.reanudaciones == [0.0]  # empezó desde cero
+
+    # Segundo intento: continúa.
+    segundo = FakeTranscriptionProvider(_segmentos_largos("C:/v/largo.mp4"))
+    pipeline2, _ = _pipeline(con, tmp_path, fake_embedder, segundo, settings)
+    ok, fail = pipeline2.procesar_lote([v])
+
+    assert (ok, fail) == (1, 0)
+    assert segundo.reanudaciones == [corte]  # arrancó donde quedó, no en 0
+    finales = SegmentRepo(con).por_video(v.video_id)
+    assert len(finales) == 60  # están los 60, sin duplicados
+    assert len({s.segment_id for s in finales}) == 60
+    assert [s.start_time for s in finales] == sorted(s.start_time for s in finales)
+    assert parciales < 60
+
+
+def test_un_video_completado_se_reprocesa_desde_cero(con, tmp_path, fake_embedder, settings):
+    """Reanudar es para lo interrumpido. Si se re-procesa un video ya
+    terminado (otro modelo, otra configuración), no debe quedar mezcla."""
+    from videoindex.infrastructure.db.repositories import SegmentRepo, VideoRepo
+
+    v = _alta_video(con, "C:/v/a.mp4", "ck-reproceso")
+    transcriptor = FakeTranscriptionProvider(_segmentos_demo("C:/v/a.mp4"))
+    pipeline, _ = _pipeline(con, tmp_path, fake_embedder, transcriptor, settings)
+    pipeline.procesar_lote([v])
+    assert VideoRepo(con).por_id(v.video_id).processing_status == "completed"
+
+    # Forzar re-proceso: se marca como pendiente y se vuelve a lanzar.
+    VideoRepo(con).actualizar_estado(v.video_id, "pending")
+    SegmentRepo(con).borrar_por_video(v.video_id)
+    otro = FakeTranscriptionProvider(_segmentos_demo("C:/v/a.mp4"))
+    pipeline2, _ = _pipeline(con, tmp_path, fake_embedder, otro, settings)
+    pipeline2.procesar_lote([VideoRepo(con).por_id(v.video_id)])
+
+    assert otro.reanudaciones == [0.0]
+    assert len(SegmentRepo(con).por_video(v.video_id)) == 2
+
+
+def test_los_hablantes_se_escriben_sobre_los_segmentos_ya_guardados(
+    con, tmp_path, fake_embedder, settings
+):
+    """La transcripción se persiste antes de saber quién habla; la
+    diarización tiene que poder completarla después con un UPDATE."""
+    from videoindex.infrastructure.db.repositories import SegmentRepo
+
+    v = _alta_video(con, "C:/v/dialogo.mp4", "ck-update-hablantes")
+    transcriptor = FakeTranscriptionProvider(_segmentos_demo("C:/v/dialogo.mp4"))
+    faiss_index = FaissIndex(tmp_path / "test.faiss", fake_embedder.dimensions)
+    pipeline = PipelineService(
+        con,
+        transcriptor,
+        fake_embedder,
+        FakeNERProvider(),
+        faiss_index,
+        settings,
+        FakeDiarizador(n_hablantes=2),
+    )
+    pipeline.procesar_lote([v])
+
+    guardados = SegmentRepo(con).por_video(v.video_id)
+    assert [s.speaker for s in guardados] == ["SPEAKER_00", "SPEAKER_01"]

@@ -208,6 +208,30 @@ class SegmentRepo:
             for r in rows
         ]
 
+    def actualizar_hablantes(self, segmentos: list[TranscriptSegment]) -> None:
+        """Escribe el hablante de segmentos YA guardados.
+
+        Hace falta porque la transcripción se persiste incrementalmente (para
+        poder reanudarla) y la diarización ocurre después, sobre el audio
+        completo: cuando se sabe quién habla, el texto ya está en la BD.
+        """
+        self.con.executemany(
+            "UPDATE transcript_segments SET speaker = ? WHERE segment_id = ?",
+            [(s.speaker, s.segment_id) for s in segmentos],
+        )
+        self.con.commit()
+
+    def ultimo_instante(self, video_id: str) -> float:
+        """Fin del último segmento guardado, o 0.0 si no hay ninguno.
+
+        Es el punto de reanudación de una transcripción interrumpida.
+        """
+        fila = self.con.execute(
+            "SELECT COALESCE(MAX(end_time), 0.0) FROM transcript_segments WHERE video_id = ?",
+            (video_id,),
+        ).fetchone()
+        return float(fila[0])
+
     def borrar_por_video(self, video_id: str) -> None:
         """Solo para re-proceso idempotente. raw_text es inmutable mientras el
         video exista con el mismo checksum; re-procesar lo regenera completo."""

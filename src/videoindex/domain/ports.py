@@ -17,9 +17,23 @@ class TranscriptionProvider(Protocol):
         ruta_video: str,
         video_id: str,
         progreso: Callable[[float], None] | None = None,
+        desde_s: float = 0.0,
+        al_segmento: Callable[[TranscriptSegment], None] | None = None,
     ) -> list[TranscriptSegment]:
-        """Transcribe el video completo con timestamps absolutos en segundos.
-        progreso(fraccion 0..1): avance real dentro de este video, opcional."""
+        """Transcribe el video con timestamps absolutos en segundos.
+
+        progreso(fraccion 0..1): avance real dentro de este video, opcional.
+
+        desde_s: instante desde el que transcribir. Sirve para REANUDAR una
+        transcripción interrumpida sin repetir lo ya hecho; los timestamps
+        devueltos siguen siendo absolutos sobre el archivo (ADR-002), no
+        relativos al punto de reanudación.
+
+        al_segmento: se llama con cada segmento en cuanto se produce, para
+        poder persistirlo YA. Transcribir una hora de audio son decenas de
+        minutos de CPU: si solo se guardara al final, cerrar la tapa del
+        portátil a mitad tiraría todo ese trabajo a la basura.
+        """
         ...
 
 

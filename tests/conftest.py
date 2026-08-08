@@ -52,27 +52,51 @@ class FakeNERProvider:
 
 
 class FakeTranscriptionProvider:
-    """Devuelve segmentos fijos; puede fallar en rutas marcadas."""
+    """Devuelve segmentos fijos; puede fallar en rutas marcadas.
+
+    Respeta el contrato completo del puerto: `desde_s` filtra lo ya
+    transcrito (como haría clip_timestamps) y `al_segmento` va emitiendo
+    cada segmento, que es lo que permite persistir de forma incremental.
+    `morir_tras` simula que el proceso se corta a mitad.
+    """
 
     def __init__(
         self,
         segmentos_por_ruta: dict[str, list[TranscriptSegment]] | None = None,
         fallar_en: set[str] | None = None,
+        morir_tras: int | None = None,
     ):
         self.segmentos_por_ruta = segmentos_por_ruta or {}
         self.fallar_en = fallar_en or set()
+        self.morir_tras = morir_tras
         self.llamadas: list[str] = []
+        self.reanudaciones: list[float] = []
 
-    def transcribir(self, ruta_video: str, video_id: str, progreso=None) -> list[TranscriptSegment]:
+    def transcribir(
+        self,
+        ruta_video: str,
+        video_id: str,
+        progreso=None,
+        desde_s: float = 0.0,
+        al_segmento=None,
+    ) -> list[TranscriptSegment]:
         self.llamadas.append(ruta_video)
+        self.reanudaciones.append(desde_s)
         if ruta_video in self.fallar_en:
             raise RuntimeError(f"fallo simulado en {ruta_video}")
-        segs = self.segmentos_por_ruta.get(ruta_video, [])
-        for s in segs:
+        emitidos = []
+        for s in self.segmentos_por_ruta.get(ruta_video, []):
+            if s.start_time < desde_s:
+                continue  # ya estaba transcrito
             s.video_id = video_id
+            if self.morir_tras is not None and len(emitidos) >= self.morir_tras:
+                raise RuntimeError("proceso interrumpido (simulado)")
+            emitidos.append(s)
+            if al_segmento:
+                al_segmento(s)
         if progreso:
             progreso(1.0)
-        return segs
+        return emitidos
 
 
 @pytest.fixture
