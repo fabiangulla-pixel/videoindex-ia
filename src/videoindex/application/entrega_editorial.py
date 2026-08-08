@@ -90,10 +90,20 @@ def _es_lectura(
     return None
 
 
+# Un párrafo de más de minuto y medio de habla (~250 palabras) ya es
+# incómodo de corregir en Word. Se corta ahí, siempre en frontera de
+# segmento y sin cambiar de hablante.
+DURACION_PARRAFO_S = 90.0
+PAUSA_PARRAFO_S = 8.0
+
+
 def construir_intervenciones(segmentos: list[TranscriptSegment]) -> list[Intervencion]:
-    """Intervenciones legibles: se parten también por silencios largos para
-    que una narración continua no salga como un párrafo de veinte minutos."""
-    return agrupar_intervenciones(segmentos, pausa_maxima_s=20.0)
+    """Intervenciones legibles: además del cambio de hablante, se parten por
+    silencios y por duración, para que la narración continua de un documental
+    no salga como un solo párrafo de veinte minutos."""
+    return agrupar_intervenciones(
+        segmentos, pausa_maxima_s=PAUSA_PARRAFO_S, duracion_maxima_s=DURACION_PARRAFO_S
+    )
 
 
 # --------------------------------------------------------------------------

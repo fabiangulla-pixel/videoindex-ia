@@ -31,7 +31,18 @@ def cargar():
     from videoindex.application.rotulos_service import Rotulo
     from videoindex.domain.models import SpeakerTurn, TranscriptSegment
 
-    datos_seg = json.loads((TRABAJO / "segmentos.json").read_text(encoding="utf-8"))
+    # El consolidado si ya existe; si no, el checkpoint incremental. Así el
+    # paquete se puede armar aunque la transcripción siga en marcha (útil
+    # para revisar el formato sin esperar a que termine).
+    ruta_consolidado = TRABAJO / "segmentos.json"
+    if ruta_consolidado.exists():
+        datos_seg = json.loads(ruta_consolidado.read_text(encoding="utf-8"))
+    else:
+        datos_seg = [
+            json.loads(linea)
+            for linea in (TRABAJO / "segmentos.jsonl").read_text(encoding="utf-8").splitlines()
+            if linea.strip()
+        ]
     segmentos = [
         TranscriptSegment(
             segment_id=s["segment_id"],
@@ -44,10 +55,15 @@ def cargar():
         )
         for s in datos_seg
     ]
-    turnos = [
-        SpeakerTurn(t["start"], t["end"], t["speaker"])
-        for t in json.loads((TRABAJO / "turnos.json").read_text(encoding="utf-8"))
-    ]
+    ruta_turnos = TRABAJO / "turnos.json"
+    turnos = (
+        [
+            SpeakerTurn(t["start"], t["end"], t["speaker"])
+            for t in json.loads(ruta_turnos.read_text(encoding="utf-8"))
+        ]
+        if ruta_turnos.exists()
+        else []
+    )
     ruta_rotulos = TRABAJO / "rotulos.json"
     rotulos = (
         [Rotulo(**r) for r in json.loads(ruta_rotulos.read_text(encoding="utf-8"))]

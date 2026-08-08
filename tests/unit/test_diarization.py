@@ -128,3 +128,32 @@ def test_etiquetas_en_orden_y_nombre_visible():
     assert nombre_visible("S1", {"S1": "Marta"}) == "Marta"
     assert nombre_visible("S1", {}) == "S1"  # sin nombre, la etiqueta cruda
     assert nombre_visible(None, {}) == SIN_HABLANTE
+
+
+def test_agrupar_intervenciones_parte_un_turno_demasiado_largo():
+    """Sin esto, la narración continua de un documental sale como un solo
+    párrafo de miles de palabras, imposible de corregir."""
+    segmentos = hacer_segmentos("v1", [(f"frase {i}", i * 10.0, i * 10.0 + 9.0) for i in range(30)])
+    for seg in segmentos:
+        seg.speaker = "A"  # 300 s del MISMO hablante, sin pausas largas
+
+    entero = agrupar_intervenciones(segmentos)
+    assert len(entero) == 1  # comportamiento previo: un bloque
+
+    partido = agrupar_intervenciones(segmentos, duracion_maxima_s=90.0)
+    assert len(partido) > 1
+    assert all(i.speaker == "A" for i in partido)  # la atribución no cambia
+    # El corte cae en frontera de segmento: ninguna frase se parte.
+    assert sum(len(i.segment_ids) for i in partido) == 30
+    assert " ".join(i.texto for i in partido) == entero[0].texto
+
+
+def test_el_corte_por_duracion_no_mezcla_hablantes():
+    segmentos = hacer_segmentos("v1", [(f"f{i}", i * 10.0, i * 10.0 + 9.0) for i in range(20)])
+    for i, seg in enumerate(segmentos):
+        seg.speaker = "A" if i < 10 else "B"
+    partido = agrupar_intervenciones(segmentos, duracion_maxima_s=30.0)
+    for intervencion in partido:
+        ids = set(intervencion.segment_ids)
+        hablantes = {s.speaker for s in segmentos if s.segment_id in ids}
+        assert len(hablantes) == 1

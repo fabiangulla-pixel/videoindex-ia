@@ -109,14 +109,21 @@ def renombrar_por_aparicion(turnos: list[SpeakerTurn]) -> list[SpeakerTurn]:
 
 
 def agrupar_intervenciones(
-    segmentos: list[TranscriptSegment], pausa_maxima_s: float = 0.0
+    segmentos: list[TranscriptSegment],
+    pausa_maxima_s: float = 0.0,
+    duracion_maxima_s: float = 0.0,
 ) -> list[Intervencion]:
     """Segmentos consecutivos del MISMO hablante → una intervención.
 
-    `pausa_maxima_s > 0` parte además una intervención muy larga cuando hay
-    un silencio mayor que ese umbral aunque no cambie el hablante (útil para
-    no producir párrafos de veinte minutos en una clase magistral). 0 = no
-    partir nunca por pausa, solo por cambio de hablante.
+    `pausa_maxima_s > 0` parte además una intervención cuando hay un silencio
+    mayor que ese umbral aunque no cambie el hablante. 0 = no partir por pausa.
+
+    `duracion_maxima_s > 0` parte un turno demasiado largo en párrafos
+    manejables. Hace falta de verdad: en un documental, la narración puede
+    seguir cinco minutos sin una sola pausa larga, y eso produce un párrafo
+    de mil palabras imposible de corregir. El corte cae en una frontera de
+    segmento, así que no parte ninguna frase por la mitad, y como el hablante
+    es el mismo la atribución no cambia.
 
     Un video sin diarizar (todos los `speaker` en None) devuelve UNA sola
     intervención sin hablante: la transcripción corrida de siempre.
@@ -128,7 +135,10 @@ def agrupar_intervenciones(
             previa = intervenciones[-1]
             mismo_hablante = previa.speaker == seg.speaker
             pausa = seg.start_time - previa.end_time
-            cortar = not mismo_hablante or (pausa_maxima_s > 0 and pausa > pausa_maxima_s)
+            larga = duracion_maxima_s > 0 and (
+                previa.end_time - previa.start_time >= duracion_maxima_s
+            )
+            cortar = not mismo_hablante or (pausa_maxima_s > 0 and pausa > pausa_maxima_s) or larga
         if cortar:
             intervenciones.append(
                 Intervencion(
