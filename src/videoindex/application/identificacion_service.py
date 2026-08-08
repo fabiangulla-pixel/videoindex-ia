@@ -16,6 +16,7 @@ incertidumbre para que lo resuelva una persona.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from videoindex.application.rotulos_service import Rotulo
@@ -28,6 +29,9 @@ ALTO, MEDIO, BAJO = "ALTO", "MEDIO", "BAJO"
 # antes y después: el rótulo suele entrar un instante después de que la
 # persona empieza a hablar, y a veces se queda puesto al terminar la frase.
 MARGEN_ROTULO_S = 6.0
+
+# Largo máximo de una línea de rótulo de identificación.
+MAX_LARGO_LINEA = 45
 
 # Palabras que delatan que una línea del rótulo es un CARGO y no un nombre.
 _CARGOS = (
@@ -191,6 +195,88 @@ def _parece_nombre(linea: str) -> bool:
     return 1 <= len(linea.split()) <= 4
 
 
+# Palabras de un crédito o una placa institucional. Un rótulo que las lleva
+# dice de dónde salió el material (una foto de archivo, una grabación), no
+# quién está hablando en pantalla.
+_CREDITOS = {
+    "FUNDACION",
+    "EDITORIAL",
+    "UNIVERSIDAD",
+    "MUSEO",
+    "ARCHIVO",
+    "BIBLIOTECA",
+    "INSTITUTO",
+    "CENTRO",
+    "COLECCION",
+    "PRODUCCION",
+    "REALIZACION",
+    "MONTAJE",
+    "GUION",
+    "CAMARA",
+    "SONIDO",
+    "EDICION",
+    "JEFA",
+    "JEFE",
+    "AGRADECIMIENTOS",
+    "VOZ",
+    "IMAGENES",
+    "MUSICA",
+    "DERECHOS",
+}
+
+
+def _tiene_cargo(linea: str) -> bool:
+    palabras = set(re.sub(r"[^\wÁÉÍÓÚÑ ]", " ", linea.upper()).split())
+    return bool(palabras & set(_CARGOS))
+
+
+def _es_credito(linea: str) -> bool:
+    nfkd = unicodedata.normalize("NFKD", linea.upper())
+    sin_tildes = "".join(c for c in nfkd if not unicodedata.combining(c))
+    palabras = set(re.sub(r"[^A-ZÑ ]", " ", sin_tildes).split())
+    return bool(palabras & _CREDITOS)
+
+
+def _clave_nombre(nombre: str) -> str:
+    """Nombre normalizado y SIN espacios, para comparar variantes del OCR.
+
+    Quitar los espacios es lo que hace equivalentes "CARLA ULLOA" y
+    "CARLAULLOA", que es como se leyó el mismo rótulo en otro momento.
+    """
+    nfkd = unicodedata.normalize("NFKD", nombre.upper())
+    sin_tildes = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return re.sub(r"[^A-ZÑ0-9]", "", sin_tildes)
+
+
+def canonizar_nombres(nombres: list[str]) -> dict[str, str]:
+    """nombre leído -> nombre canónico (el más completo de su familia).
+
+    A lo largo de un documental el mismo rótulo se lee de formas distintas:
+    "CARLA ULLOA", "CARLA ULL", "CARLAULLOA", "ULLOA". Sin unificarlas, el
+    registro de participantes diría que hay cuatro personas donde hay una.
+
+    Dos lecturas son la misma persona si, quitando espacios y tildes, una
+    está contenida en la otra. Es conservador: nombres realmente distintos
+    ("SOLEDAD BIANCHI" y "HERNÁN BRAVO") nunca se solapan así.
+    """
+    # Se ordena por letras y, a igualdad, por longitud del texto original:
+    # así entre "CARLAULLOA" y "CARLA ULLOA" (mismas letras) gana la que trae
+    # el espacio, que es la lectura bien segmentada y la legible.
+    unicos = sorted(set(nombres), key=lambda n: (len(_clave_nombre(n)), len(n)), reverse=True)
+    canonico: dict[str, str] = {}
+    for nombre in unicos:
+        clave = _clave_nombre(nombre)
+        if not clave:
+            continue
+        for ya in canonico.values():
+            if clave and clave in _clave_nombre(ya):
+                canonico[nombre] = ya
+                break
+        else:
+            canonico[nombre] = nombre
+    return canonico
+
+
 def _separar_cargo(linea: str) -> tuple[str, str | None]:
     """'POETA INVESTIGADORA UNAM' -> ('POETA INVESTIGADORA', 'UNAM')."""
     tokens = linea.split()
@@ -209,17 +295,39 @@ def interpretar_rotulo(rotulo: Rotulo) -> tuple[str, str | None, str | None] | N
     """(nombre, cargo, institución) si el rótulo identifica a una persona.
 
     Devuelve None para los rótulos que NO son identificaciones: citas de
-    libros, títulos, fechas. Confundirlos sería atribuirle a alguien el
-    nombre de un poemario.
+    libros, créditos de archivo, títulos, fechas. Confundirlos sería
+    atribuirle a alguien el nombre de un poemario.
     """
     if not rotulo.lineas:
         return None
+
+    # Un año en CUALQUIER línea convierte la tarjeta entera en una cita, no
+    # solo esa línea. Caso real: «Canto General / Pablo Neruda, 1950» se leía
+    # como una persona llamada "Canto General" con cargo "Pablo Neruda, 1950".
+    if any(re.search(r"\b(1[89]\d{2}|20\d{2})\b", linea) for linea in rotulo.lineas):
+        return None
+
+    # Un rótulo de identificación es corto: un nombre y un cargo caben de
+    # sobra en 45 caracteres. Las líneas largas son la lista de créditos
+    # finales, donde el OCR mezcla decenas de nombres y funciones en una
+    # sola tira: leerla como "una persona con un cargo larguísimo" metía
+    # basura en el registro de participantes.
+    if any(len(linea) > MAX_LARGO_LINEA for linea in rotulo.lineas):
+        return None
+
+    # El filtro de créditos se aplica LÍNEA a línea, no al rótulo entero:
+    # «FUNDACIÓN PABLO NERUDA» sola es la procedencia de un material de
+    # archivo (no hay nadie hablando), pero debajo de un nombre es la
+    # institución de esa persona. Rechazar el rótulo completo perdía
+    # participantes reales.
     nombre = None
     cargo = None
     institucion = None
     for linea in rotulo.lineas:
-        if nombre is None and _parece_nombre(linea):
+        if nombre is None and not _es_credito(linea) and _parece_nombre(linea):
             nombre = linea.strip()
+        elif _es_credito(linea) and institucion is None:
+            institucion = linea.strip()
         else:
             texto, inst = _separar_cargo(linea)
             if inst:
@@ -258,6 +366,13 @@ def interpretar_cita(rotulo: Rotulo) -> CitaEnPantalla | None:
     nombre de autor y la otra un título (una frase, no un cargo).
     """
     if not rotulo.lineas or interpretar_rotulo(rotulo) is not None:
+        return None
+    # Créditos de archivo y de producción: no son textos leídos en voz alta.
+    if any(_es_credito(linea) for linea in rotulo.lineas):
+        return None
+    # Una línea suelta de cargo («POETA ENSAYISTA») es el resto de un rótulo
+    # cuyo nombre no se llegó a leer, no una cita.
+    if all(not _parece_nombre(linea) and _tiene_cargo(linea) for linea in rotulo.lineas):
         return None
 
     titulo = None
@@ -342,12 +457,15 @@ def identificar(
         ident.segundos_hablados += turno.duration
 
     # --- evidencia visual: los rótulos ---------------------------------
+    # Primero se unifican las variantes con que el OCR leyó cada nombre a lo
+    # largo del video; si no, la misma persona entraría varias veces.
+    interpretados = [(r, i) for r in rotulos if (i := interpretar_rotulo(r)) is not None]
+    canonico = canonizar_nombres([nombre for _, (nombre, _, _) in interpretados])
+
     reclamos: dict[str, set[str]] = {}  # nombre -> etiquetas que lo reclaman
-    for rotulo in rotulos:
-        interpretado = interpretar_rotulo(rotulo)
-        if interpretado is None:
-            continue
+    for rotulo, interpretado in interpretados:
         nombre, cargo, institucion = interpretado
+        nombre = canonico.get(nombre, nombre)
         etiqueta, segundos = _hablante_dominante(
             turnos, rotulo.inicio_s - MARGEN_ROTULO_S, rotulo.fin_s + MARGEN_ROTULO_S
         )

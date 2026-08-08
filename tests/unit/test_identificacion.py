@@ -13,7 +13,9 @@ from videoindex.application.identificacion_service import (
     MEDIO,
     _parece_nombre,
     _separar_cargo,
+    canonizar_nombres,
     identificar,
+    interpretar_cita,
     interpretar_rotulo,
     menciones_verbales,
 )
@@ -151,3 +153,74 @@ def test_una_voz_breve_sin_rotulo_no_se_declara_narracion():
     identidad = identificar([SpeakerTurn(0.0, 20.0, "SPEAKER_00")], [])[0]
     assert not identidad.es_voz_en_off
     assert identidad.etiqueta_editorial == "VOZ NO IDENTIFICADA"
+
+
+def test_una_tarjeta_de_libro_completa_no_produce_persona():
+    """Regresión del material real: «Canto General / Pablo Neruda, 1950» se
+    leía como una persona llamada "Canto General" con cargo "Pablo Neruda,
+    1950". El año en CUALQUIER línea convierte la tarjeta en una cita."""
+    r = _rotulo(0, 5, ["Canto General", "Pablo Neruda, 1950"])
+    assert interpretar_rotulo(r) is None
+    cita = interpretar_cita(r)
+    assert cita.titulo == "Canto General" and cita.autor == "Pablo Neruda"
+
+
+def test_un_credito_de_archivo_no_es_una_persona_ni_una_cita():
+    """«FUNDACIÓN PABLO NERUDA» dice de dónde salió una foto, no quién habla."""
+    r = _rotulo(0, 5, ["FUNDACIÓN PABLO NERUDA"])
+    assert interpretar_rotulo(r) is None
+    assert interpretar_cita(r) is None
+
+
+def test_un_nombre_con_su_institucion_debajo_si_es_una_persona():
+    """El filtro de créditos va línea a línea: rechazar el rótulo entero
+    perdía participantes reales rotulados con su institución."""
+    nombre, cargo, institucion = interpretar_rotulo(
+        _rotulo(0, 5, ["KEMY", "FUNDACIÓN PABLO NERUDA"])
+    )
+    assert nombre == "KEMY"
+    assert institucion == "FUNDACIÓN PABLO NERUDA"
+
+
+def test_los_creditos_finales_no_entran_como_participante():
+    """Al final del video el OCR mezcla decenas de nombres en una tira larga."""
+    largo = "IHVGS(I98CIOH, QUIOÍ1 Saira Gabriela Cruz Castillo Alejandro Falcón Narración"
+    assert interpretar_rotulo(_rotulo(3140, 3150, ["Lucero Ramírez", largo])) is None
+
+
+def test_una_linea_suelta_de_cargo_no_es_una_cita():
+    """Resto de un rótulo cuyo nombre no se llegó a leer."""
+    assert interpretar_cita(_rotulo(0, 5, ["POETA ENSAYISTA"])) is None
+
+
+def test_canonizar_unifica_las_variantes_del_mismo_nombre():
+    """Caso real: el mismo rótulo se leyó de cuatro maneras a lo largo del
+    documental. Sin unificar, el registro diría que son cuatro personas."""
+    canon = canonizar_nombres(
+        ["CARLA ULLOA", "ULLOA", "CARLA ULL", "CARLAULLOA", "SOLEDAD BIANCHI"]
+    )
+    assert canon["ULLOA"] == "CARLA ULLOA"
+    assert canon["CARLA ULL"] == "CARLA ULLOA"
+    assert canon["CARLAULLOA"] == "CARLA ULLOA"  # sin espacio, misma persona
+    assert canon["SOLEDAD BIANCHI"] == "SOLEDAD BIANCHI"  # no se mezcla
+
+
+def test_canonizar_no_funde_personas_distintas():
+    canon = canonizar_nombres(["HERNÁN BRAVO", "SOLEDAD BIANCHI", "RAFAEL VARGAS"])
+    assert len(set(canon.values())) == 3
+
+
+def test_las_variantes_del_nombre_no_cuentan_como_personas_distintas(  # noqa: E501
+):
+    """Con canonización, cuatro lecturas de Carla Ulloa son UNA identidad."""
+    turnos = [SpeakerTurn(200.0, 900.0, "SPEAKER_01")]
+    rotulos = [
+        _rotulo(205.0, 211.0, ["CARLA ULLOA", "HISTORIADORA"]),
+        _rotulo(430.0, 436.0, ["ULLOA", "HISTORIADORA"]),
+        _rotulo(810.0, 816.0, ["CARLA ULL"]),
+    ]
+    identidades = identificar(turnos, rotulos)
+    assert len(identidades) == 1
+    assert identidades[0].nombre == "CARLA ULLOA"
+    # No debe haberse marcado conflicto: son la misma persona.
+    assert not any("CONFLICTO" in e for e in identidades[0].evidencias)

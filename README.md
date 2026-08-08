@@ -27,9 +27,17 @@ La especificación completa (PRD, SAD, ADRs) vive en
   embeddings ECAPA y agrupamiento. Las etiquetas anónimas se renombran a
   mano ("SPEAKER_00" → "Marta Ríos") y ese nombre se usa en todo lo que se
   exporte. Un cambio de hablante corta el chunk, para no atribuir mal una cita.
+- **Identificación nominal**: cruza los turnos de voz con los **rótulos
+  sobreimpresos** que lee del video (OCR con consenso temporal) y con las
+  presentaciones dichas en voz alta, para pasar de "SPEAKER_01" a
+  "CARLA ULLOA — HISTORIADORA", con nivel de confianza y la evidencia que lo
+  respalda. Nunca inventa: sin evidencia deja identificación funcional.
 - **Exportación editorial** de la transcripción a Word / Markdown / SRT, con
   ficha de procedencia y la advertencia de que es transcripción automática
-  sin cotejar.
+  sin cotejar. Y un paquete completo de ocho documentos (literal, limpia,
+  txt, srt, participantes.xlsx, citas.xlsx, incertidumbres, proceso técnico).
+- **Reanudable**: la transcripción se guarda cada 25 segmentos. Si se cierra
+  el portátil a mitad de una hora de audio, al volver continúa donde quedó.
 - **Segmentación semántica** local: pausas largas + caída de similitud coseno
   entre ventanas → Semantic Chunks (ADR-001), con `discourse_type` heurístico.
 - **Entidades** (spaCy es) + **grafo simple** de co-ocurrencia (ADR-005).

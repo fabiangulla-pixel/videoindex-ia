@@ -68,6 +68,57 @@ grabada en un texto publicable (transcripción editada para la revista
   reemplazarlo: guardar una pestaña ya no borra la otra.
 - El ETA usa el factor del modelo elegido + el sobrecosto de diarizar.
 
+### Identificación nominal: de "SPEAKER_01" a "CARLA ULLOA"
+
+La diarización solo dice que una voz es distinta de otra. El nombre no está
+en el audio: está en la imagen, en el rótulo sobreimpreso. Se añadió el
+cruce de las tres fuentes — turnos de voz × rótulos en pantalla × menciones
+verbales — con nivel de confianza y la evidencia que respalda cada nombre.
+
+- **`infrastructure/media/frames.py`**: muestreo de fotogramas con PyAV.
+- **`infrastructure/ocr/tesseract_ocr.py`**: OCR por LÍNEAS (en un rótulo el
+  nombre y el cargo son datos distintos; unirlos pierde la estructura).
+  Filtro de tokens calibrado con material real: las palabras de un rótulo
+  salen con confianza 72-93 y el ruido de las texturas con 4-66.
+- **`application/rotulos_service.py`**: consenso temporal. El OCR de un
+  fotograma suelto no es fiable — el mismo rótulo se leyó «SOLEDAD BIANCHI»,
+  «%LEDAD BIANCHI», «IANCHI» y «TE SOLEDAD BIANCHI» en cuadros consecutivos.
+  De cada familia de lecturas se toma la **más larga** y se le limpian los
+  bordes: la lectura parcial es texto que falta, el ruido del gráfico es
+  texto añadido y corto. (Quedarse con la más repetida, que parecía lo
+  sensato, devolvía «ULLOA» en vez de «CARLA ULLOA».)
+- **`application/identificacion_service.py`**: asigna cada rótulo a quien más
+  habla en esa ventana; marca conflictos (un mismo nombre sobre dos voces
+  sugiere que la diarización partió a una persona); trata como voz en off a
+  la voz que habla mucho y nunca se rotula; y **rechaza las tarjetas de
+  cita** para no atribuirle a nadie el título de un libro.
+- **`domain/limpieza.py`**: versión de lectura. La lista de muletillas es
+  corta a propósito: solo interjecciones sin contenido. "o sea" y "este" se
+  quedan porque muchas veces articulan el argumento.
+- **`application/entrega_editorial.py`**: paquete de ocho documentos
+  (literal, limpia, txt, srt, dos xlsx, incertidumbres, proceso técnico).
+
+Regla que vertebra todo: **es peor inventar un nombre que dejar una voz sin
+identificar**. Sin evidencia se usa identificación funcional y el caso va a
+`incertidumbres.md`.
+
+### Transcripción reanudable
+
+Transcribir 54 min con `large-v3-turbo` son ~65 min de CPU. La máquina se
+suspendió al 84 % y no quedó nada aprovechable, porque los segmentos solo se
+guardaban al terminar. Un proceso largo sin checkpoint no es lento: es
+**frágil**.
+
+- `TranscriptionProvider` gana `desde_s` (reanudar) y `al_segmento`
+  (persistir conforme se produce). `FasterWhisperProvider` reanuda con
+  `clip_timestamps`; verificado sobre audio real que los timestamps siguen
+  siendo **absolutos** (con `desde_s=600` el primer segmento vuelve con
+  `start=600.0`), así que ADR-002 se mantiene.
+- `PipelineService` vuelca a la BD cada 25 segmentos (~2 min de audio, que es
+  lo máximo que se puede perder) y al arrancar continúa desde donde quedó.
+- `_limpiar_derivados` gana `conservar_segmentos`: el borrado idempotente
+  destruía justo el trabajo parcial que se quería reanudar.
+
 ### Pase de Modo Ingeniero
 
 - **`VideoIndexIA.spec` ahora se versiona**: el `.gitignore` lo excluía con
