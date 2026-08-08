@@ -97,12 +97,24 @@ DURACION_PARRAFO_S = 90.0
 PAUSA_PARRAFO_S = 8.0
 
 
-def construir_intervenciones(segmentos: list[TranscriptSegment]) -> list[Intervencion]:
+def construir_intervenciones(
+    segmentos: list[TranscriptSegment], fin_contenido_s: float | None = None
+) -> list[Intervencion]:
     """Intervenciones legibles: además del cambio de hablante, se parten por
     silencios y por duración, para que la narración continua de un documental
-    no salga como un solo párrafo de veinte minutos."""
+    no salga como un solo párrafo de veinte minutos.
+
+    `fin_contenido_s` deja fuera lo que suene ya sobre los créditos finales
+    (música, canción, una última locución de cierre): no es contenido del
+    documental y no debe entrar en el texto que se publica.
+    """
+    utiles = (
+        [s for s in segmentos if s.start_time < fin_contenido_s]
+        if fin_contenido_s is not None
+        else segmentos
+    )
     return agrupar_intervenciones(
-        segmentos, pausa_maxima_s=PAUSA_PARRAFO_S, duracion_maxima_s=DURACION_PARRAFO_S
+        utiles, pausa_maxima_s=PAUSA_PARRAFO_S, duracion_maxima_s=DURACION_PARRAFO_S
     )
 
 
@@ -516,11 +528,22 @@ def generar_paquete(
     identidades: list[Identidad],
     citas: Sequence[CitaEnPantalla],
     n_rotulos: int = 0,
+    fin_contenido_s: float | None = None,
 ) -> dict[str, Path]:
-    """Escribe los ocho documentos y devuelve sus rutas."""
+    """Escribe los ocho documentos y devuelve sus rutas.
+
+    `fin_contenido_s`: instante en que arrancan los créditos finales. Lo que
+    suene por encima de los créditos (música, una locución de cierre) no es
+    contenido del documental y no entra en el texto.
+    """
     carpeta = Path(carpeta)
     carpeta.mkdir(parents=True, exist_ok=True)
-    intervenciones = construir_intervenciones(segmentos)
+    intervenciones = construir_intervenciones(segmentos, fin_contenido_s)
+    if fin_contenido_s is not None:
+        contexto.notas.append(
+            f"El texto termina en {marca_tiempo(fin_contenido_s)}: a partir de ahí "
+            "corren los créditos finales, que se excluyen de la transcripción."
+        )
 
     salidas: dict[str, Path] = {}
     salidas["literal"] = escribir_docx(

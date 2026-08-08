@@ -21,6 +21,7 @@ os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
 _TEMP = Path(tempfile.mkdtemp(prefix="videoindex_smoke_"))
 os.environ["VIDEOINDEX_DATA"] = str(_TEMP)
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from videoindex.config import paths  # noqa: E402
@@ -127,6 +128,52 @@ config._n_hablantes.setValue(2)
 comprobar(not config._umbral.isEnabled(), "con nº fijo de hablantes el umbral se bloquea")
 config._diarizacion.setChecked(False)
 comprobar(not config._n_hablantes.isEnabled(), "sin diarización se bloquean sus ajustes")
+
+print("IdentidadesDialog:", flush=True)
+from videoindex.application.identificacion_service import ALTO, BAJO, Identidad  # noqa: E402
+from videoindex.presentation.identidades_dialog import IdentidadesDialog  # noqa: E402
+
+propuestas = [
+    Identidad(
+        speaker_label="SPEAKER_00",
+        nombre="CARLA ULLOA",
+        funcion="HISTORIADORA",
+        confianza=ALTO,
+        primera_aparicion=205.0,
+        evidencias=["Rótulo en pantalla [00:03:25]"],
+    ),
+    Identidad(
+        speaker_label="SPEAKER_01",
+        nombre="Gabriela Mistral",
+        confianza="MEDIO",
+        primera_aparicion=1301.0,
+        evidencias=["Rótulo sin cargo: puede ser un pie de foto"],
+    ),
+    Identidad(
+        speaker_label="SPEAKER_02",
+        confianza=BAJO,
+        es_voz_en_off=True,
+        primera_aparicion=0.0,
+        segundos_hablados=900.0,
+    ),
+]
+ident = IdentidadesDialog(propuestas, n_rotulos=33)
+comprobar(ident._tabla.rowCount() == 3, "una fila por voz")
+marcadas = ident.nombres_confirmados()
+comprobar(
+    marcadas == {"SPEAKER_00": "CARLA ULLOA"},
+    f"solo la de confianza ALTA viene marcada (vio {marcadas})",
+)
+ident._tabla.item(1, 0).setCheckState(Qt.CheckState.Checked)
+ident._tabla.item(1, 2).setText("Gabriela Mistral")
+comprobar(
+    "SPEAKER_01" in ident.nombres_confirmados(), "marcar a mano incorpora la propuesta dudosa"
+)
+ident._tabla.item(0, 2).setText("   ")
+comprobar(
+    "SPEAKER_00" not in ident.nombres_confirmados(),
+    "un nombre vacio no se guarda aunque este marcado",
+)
 
 print(
     f"\n{'SMOKE DIALOGOS OK' if not fallos else 'SMOKE DIALOGOS FALLO: ' + '; '.join(fallos)}",

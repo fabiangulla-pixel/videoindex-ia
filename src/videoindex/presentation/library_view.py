@@ -21,7 +21,10 @@ from PySide6.QtWidgets import (
 )
 
 from videoindex.application.time_estimator import TimeEstimator
+from videoindex.config import paths
 from videoindex.config.settings import SETTINGS
+from videoindex.infrastructure.db.connection import conectar
+from videoindex.infrastructure.db.repositories import SpeakerRepo
 from videoindex.presentation.dossier_view import DossierConfirmDialog, DossierResultDialog
 from videoindex.presentation.workers import (
     DescargaWorker,
@@ -29,6 +32,8 @@ from videoindex.presentation.workers import (
     DossierRecopilarWorker,
     EliminarVideoWorker,
     EscaneoWorker,
+    IdentificarHablantesWorker,
+    PaqueteEditorialWorker,
     PipelineWorker,
     TrimWorker,
 )
@@ -115,6 +120,11 @@ class LibraryView(QWidget):
         self._worker_dossier = None  # flujo independiente de la ingesta
         self._worker_eliminar = None  # flujo independiente de la ingesta
         self._dialogo_transcripcion = None  # ventana no-modal: hay que retenerla
+        self._worker_identidad = None  # OCR de rótulos / paquete editorial
+        # Rótulos ya leídos en esta sesión: releerlos costaría los mismos
+        # minutos de OCR, así que se reutilizan para el paquete editorial.
+        self._rotulos_leidos: list = []
+        self._video_identificado: tuple[str, str] = ("", "")
         # Mismo sentinel que VideoRepo.listar(project_id=...): "__todos__" no
         # filtra, None filtra por "sin proyecto", cualquier otro string es
         # un project_id real.
@@ -192,9 +202,22 @@ class LibraryView(QWidget):
         proyecto_item = self.tabla.item(fila, 1)
         tiene_proyecto = proyecto_item is not None and proyecto_item.text() != "—"
 
+        completado = estado_item.text() == _ETIQUETAS_ESTADO["completed"]
         menu = QMenu(self)
         accion_transcripcion = menu.addAction("🗣 Transcripción y hablantes…")
-        accion_transcripcion.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
+        accion_transcripcion.setEnabled(completado)
+        accion_identificar = menu.addAction("🎬 Identificar hablantes por los rótulos…")
+        accion_identificar.setToolTip(
+            "Lee los rótulos sobreimpresos del video y propone el nombre real de cada voz"
+        )
+        accion_identificar.setEnabled(completado)
+        accion_paquete = menu.addAction("📚 Generar paquete editorial…")
+        accion_paquete.setToolTip(
+            "Los ocho documentos de una transcripción profesional: Word literal y "
+            "limpio, txt, subtítulos, participantes, citas, incertidumbres y proceso"
+        )
+        accion_paquete.setEnabled(completado)
+        menu.addSeparator()
         accion_dossier = menu.addAction("📄 Generar dossier del video…")
         # Sin chunks (video no completado) no hay nada que agrupar por entidad.
         accion_dossier.setEnabled(estado_item.text() == _ETIQUETAS_ESTADO["completed"])
@@ -215,6 +238,10 @@ class LibraryView(QWidget):
         elegida = menu.exec(self.tabla.viewport().mapToGlobal(pos))
         if elegida == accion_transcripcion:
             self._abrir_transcripcion(video_id, item_titulo.text(), _ruta)
+        elif elegida == accion_identificar:
+            self._identificar_hablantes(video_id, item_titulo.text(), _ruta)
+        elif elegida == accion_paquete:
+            self._generar_paquete(video_id, item_titulo.text())
         elif elegida == accion_dossier:
             self._iniciar_dossier(video_id, item_titulo.text())
         elif elegida == accion_recortar:
@@ -243,6 +270,118 @@ class LibraryView(QWidget):
         # Sin esta referencia el diálogo no-modal se destruiría al salir del
         # método (queda sin dueño fuerte en Python) y desaparecería solo.
         self._dialogo_transcripcion = dialogo
+
+    def _identificar_hablantes(self, video_id: str, titulo: str, ruta: str) -> None:
+        """Lee los rótulos del video y propone quién es cada voz."""
+        if self._worker_identidad is not None and self._worker_identidad.isRunning():
+            QMessageBox.information(
+                self, "Identificar hablantes", "Ya hay una lectura de rótulos en curso."
+            )
+            return
+        respuesta = QMessageBox.question(
+            self,
+            "Identificar hablantes",
+            f'Se van a leer los rótulos sobreimpresos de "{titulo}" para deducir el '
+            "nombre real de cada voz.\n\n"
+            "Costo API: $0 (OCR local).\n"
+            "Tiempo: del orden de un minuto por cada dos de video, porque hay que "
+            "analizar la imagen fotograma a fotograma.\n\n"
+            "Nada se guarda sin que tú lo confirmes después.\n\n¿Continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+
+        self.progreso.setVisible(True)
+        self.progreso.setRange(0, 100)
+        self.etiqueta_estado.setText("Leyendo los rótulos del video…")
+        self._registrar(f'Identificando hablantes en "{titulo}" por los rótulos…')
+        self._video_identificado = (video_id, titulo)
+        self._worker_identidad = IdentificarHablantesWorker(video_id, ruta)
+        self._worker_identidad.progreso.connect(self._on_progreso_identidad)
+        self._worker_identidad.listo.connect(self._confirmar_identidades)
+        self._worker_identidad.fallo.connect(self._error)
+        self._worker_identidad.start()
+
+    def _on_progreso_identidad(self, fraccion: float, mensaje: str) -> None:
+        self.progreso.setValue(int(fraccion * 100))
+        self.etiqueta_estado.setText(mensaje)
+
+    def _confirmar_identidades(self, identidades: list, rotulos: list) -> None:
+        from videoindex.presentation.identidades_dialog import IdentidadesDialog
+
+        self.progreso.setVisible(False)
+        # Los rótulos se guardan para el paquete editorial: volver a leerlos
+        # costaría los mismos minutos de OCR otra vez.
+        self._rotulos_leidos = rotulos
+        video_id, titulo = self._video_identificado
+        self._registrar(
+            f"{len(rotulos)} rótulos leídos; "
+            f"{sum(1 for i in identidades if i.nombre)} voces con nombre propuesto."
+        )
+        if not identidades:
+            QMessageBox.information(
+                self, "Identificar hablantes", "No se detectaron voces en este video."
+            )
+            return
+
+        dialogo = IdentidadesDialog(identidades, len(rotulos), self)
+        if dialogo.exec() != IdentidadesDialog.DialogCode.Accepted:
+            self.etiqueta_estado.setText("Identificación descartada; no se guardó nada.")
+            return
+
+        nombres = dialogo.nombres_confirmados()
+        con = conectar(paths.DB_PATH)
+        try:
+            repo = SpeakerRepo(con)
+            for etiqueta, nombre in nombres.items():
+                repo.renombrar(video_id, etiqueta, nombre)
+        finally:
+            con.close()
+        self._registrar(f"Nombres guardados: {', '.join(nombres.values()) or 'ninguno'}")
+        self.etiqueta_estado.setText(
+            f"{len(nombres)} voz/voces con nombre. Ábrelas en «Transcripción y hablantes»."
+        )
+        self._abrir_transcripcion(video_id, titulo, "")
+
+    def _generar_paquete(self, video_id: str, titulo: str) -> None:
+        if self._worker_identidad is not None and self._worker_identidad.isRunning():
+            return
+        carpeta = QFileDialog.getExistingDirectory(self, "Carpeta destino del paquete editorial")
+        if not carpeta:
+            return
+        nombre_seguro = "".join(c if c.isalnum() or c in " _-." else "_" for c in titulo)
+        destino = Path(carpeta) / f"{nombre_seguro} — transcripción"
+
+        if not self._rotulos_leidos:
+            QMessageBox.information(
+                self,
+                "Paquete editorial",
+                "No se han leído los rótulos de este video en esta sesión, así que el "
+                "paquete saldrá con los nombres que ya hayas puesto a mano y sin el "
+                "registro de citas.\n\nPara la versión completa, usa antes "
+                "«Identificar hablantes por los rótulos…».",
+            )
+
+        self.etiqueta_estado.setText("Generando los documentos…")
+        self._worker_identidad = PaqueteEditorialWorker(
+            video_id, str(destino), self._rotulos_leidos
+        )
+        self._worker_identidad.listo.connect(self._on_paquete_listo)
+        self._worker_identidad.fallo.connect(self._error)
+        self._worker_identidad.start()
+
+    def _on_paquete_listo(self, salidas: dict) -> None:
+        carpeta = next(iter(salidas.values())).parent
+        self._registrar(f"Paquete editorial generado: {len(salidas)} archivos en {carpeta}")
+        self.etiqueta_estado.setText(f"Paquete editorial en {carpeta}")
+        listado = "\n".join(f"  · {ruta.name}" for ruta in salidas.values())
+        QMessageBox.information(
+            self,
+            "Paquete editorial listo",
+            f"{len(salidas)} documentos en:\n{carpeta}\n\n{listado}\n\n"
+            "Empieza por «incertidumbres.md»: es la lista de lo que hay que revisar.",
+        )
 
     def _exportar_corpus_video(self, video_id: str, titulo: str) -> None:
         from videoindex.application.export_service import exportar_video_json

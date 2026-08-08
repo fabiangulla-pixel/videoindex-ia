@@ -195,6 +195,161 @@ class PipelineWorker(QThread):
                 con.close()
 
 
+class IdentificarHablantesWorker(QThread):
+    """Lee los rótulos sobreimpresos del video y propone un nombre para cada
+    voz. Es la etapa cara en imagen (un fotograma por segundo con OCR), así
+    que va en su propio hilo y reporta avance.
+
+    No escribe nada en la BD: devuelve propuestas para que la vista las
+    muestre y el usuario confirme. Ponerle nombre a alguien en un documento
+    que se va a publicar no es una decisión que deba tomar sola la máquina.
+    """
+
+    progreso = Signal(float, str)  # fraccion, mensaje
+    listo = Signal(list, list)  # list[Identidad], list[Rotulo]
+    fallo = Signal(str)
+
+    def __init__(self, video_id: str, ruta_video: str, cada_s: float = 2.0):
+        super().__init__()
+        self.video_id = video_id
+        self.ruta_video = ruta_video
+        self.cada_s = cada_s
+
+    def run(self):
+        con = None
+        try:
+            from videoindex.application.identificacion_service import identificar
+            from videoindex.application.rotulos_service import detectar_rotulos
+            from videoindex.domain.models import SpeakerTurn
+            from videoindex.infrastructure.db.connection import conectar
+            from videoindex.infrastructure.db.repositories import SegmentRepo
+            from videoindex.infrastructure.media.probe import duracion_segundos, tiene_video
+
+            if not tiene_video(self.ruta_video):
+                raise ValueError(
+                    "Este material no tiene imagen (es un archivo de solo audio), así que "
+                    "no hay rótulos que leer. Los nombres hay que ponerlos a mano en "
+                    "«Transcripción y hablantes»."
+                )
+
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            segmentos = SegmentRepo(con).por_video(self.video_id)
+            if not segmentos:
+                raise ValueError("Procesa el video antes: todavía no tiene transcripción.")
+            if all(s.speaker is None for s in segmentos):
+                raise ValueError(
+                    "Este video se procesó sin separación de voces. Actívala en "
+                    "Configuración y vuelve a procesarlo para poder identificar quién habla."
+                )
+
+            self.progreso.emit(0.0, "Leyendo los rótulos del video…")
+            duracion = duracion_segundos(self.ruta_video) or 0.0
+            rotulos = detectar_rotulos(
+                self.ruta_video,
+                cada_s=self.cada_s,
+                hasta_s=duracion,
+                progreso=lambda f: self.progreso.emit(f, f"Leyendo rótulos… {f * 100:.0f}%"),
+            )
+
+            self.progreso.emit(1.0, "Cruzando rótulos con las voces…")
+            turnos = [
+                SpeakerTurn(s.start_time, s.end_time, s.speaker)
+                for s in segmentos
+                if s.speaker is not None
+            ]
+            crudos = [{"start": s.start_time, "texto": s.clean_text} for s in segmentos]
+            self.listo.emit(identificar(turnos, rotulos, crudos), rotulos)
+        except Exception as exc:
+            self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
+
+
+class PaqueteEditorialWorker(QThread):
+    """Genera el juego completo de documentos de una transcripción."""
+
+    listo = Signal(dict)  # nombre -> Path
+    fallo = Signal(str)
+
+    def __init__(self, video_id: str, carpeta: str, rotulos: list | None = None):
+        super().__init__()
+        self.video_id = video_id
+        self.carpeta = carpeta
+        self.rotulos = rotulos or []
+
+    def run(self):
+        con = None
+        try:
+            from videoindex.application.entrega_editorial import Contexto, generar_paquete
+            from videoindex.application.identificacion_service import (
+                detectar_inicio_creditos,
+                identificar,
+                interpretar_cita,
+            )
+            from videoindex.domain.models import SpeakerTurn
+            from videoindex.infrastructure.db.connection import conectar
+            from videoindex.infrastructure.db.repositories import (
+                SegmentRepo,
+                SpeakerRepo,
+                VideoRepo,
+            )
+
+            con = conectar(paths.DB_PATH)  # conexión propia de este hilo
+            video = VideoRepo(con).por_id(self.video_id)
+            if video is None:
+                raise ValueError("El video ya no está en la biblioteca.")
+            segmentos = SegmentRepo(con).por_video(self.video_id)
+            if not segmentos:
+                raise ValueError(f'"{video.title}" todavía no tiene transcripción.')
+
+            turnos = [
+                SpeakerTurn(s.start_time, s.end_time, s.speaker)
+                for s in segmentos
+                if s.speaker is not None
+            ]
+            identidades = identificar(turnos, self.rotulos)
+            # Los nombres que el usuario ya puso a mano mandan sobre lo que
+            # dedujo el OCR: es una corrección humana, no una hipótesis.
+            nombres = SpeakerRepo(con).nombres(self.video_id)
+            for ident in identidades:
+                if ident.speaker_label in nombres:
+                    ident.nombre = nombres[ident.speaker_label]
+                    ident.confianza = "ALTO"
+                    ident.evidencias.append("Nombre confirmado a mano por el usuario")
+
+            citas = [c for r in self.rotulos if (c := interpretar_cita(r)) is not None]
+            fin = detectar_inicio_creditos(self.rotulos, video.duration_seconds or 0.0)
+
+            contexto = Contexto(
+                titulo=video.title,
+                archivo=video.path,
+                duracion_s=video.duration_seconds or 0.0,
+                url=video.source_url,
+                canal=video.source_channel,
+                publicado=video.source_published_at,
+                modelo_transcripcion=f"faster-whisper {SETTINGS.transcription.modelo} (CPU, int8)",
+                modelo_diarizacion="speechbrain ECAPA-TDNN + agrupamiento",
+                modelo_ocr="Tesseract sobre fotogramas (PyAV)" if self.rotulos else "no usado",
+            )
+            self.listo.emit(
+                generar_paquete(
+                    self.carpeta,
+                    contexto,
+                    segmentos,
+                    identidades,
+                    citas,
+                    len(self.rotulos),
+                    fin_contenido_s=fin,
+                )
+            )
+        except Exception as exc:
+            self.fallo.emit(str(exc))
+        finally:
+            if con is not None:
+                con.close()
+
+
 class BusquedaWorker(QThread):
     resultados = Signal(list)  # list[SearchResult]
     fallo = Signal(str)

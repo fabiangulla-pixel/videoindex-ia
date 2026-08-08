@@ -58,6 +58,22 @@ def es_video(ruta: Path) -> bool:
     return ruta.suffix.lower() in EXTENSIONES_VIDEO
 
 
+def tiene_video(ruta: str | Path) -> bool:
+    """True si el archivo trae imagen, no solo sonido.
+
+    La extensión no basta: un .mp4 puede ser solo-audio (una descarga de
+    YouTube que separa las pistas) o solo-video, sin sonido. Hay que abrir el
+    contenedor y mirar los streams de verdad.
+    """
+    try:
+        import av
+
+        with av.open(str(ruta)) as contenedor:
+            return bool(contenedor.streams.video)
+    except Exception:
+        return False
+
+
 def _es_frame_claro(promedio_luminancia: float, umbral: float) -> bool:
     """Extraída de detectar_inicio_contenido() para ser testeable con
     arrays numpy sintéticos, sin decodificar video real."""

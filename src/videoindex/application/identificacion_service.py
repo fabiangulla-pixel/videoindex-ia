@@ -401,6 +401,37 @@ def interpretar_cita(rotulo: Rotulo) -> CitaEnPantalla | None:
     )
 
 
+def detectar_inicio_creditos(
+    rotulos: list[Rotulo], duracion_s: float, cola: float = 0.20
+) -> float | None:
+    """Instante en que arrancan los créditos finales, o None si no se ven.
+
+    Los créditos no son contenido: en una transcripción publicable sobran, y
+    además el OCR los lee como una tira ilegible de decenas de nombres.
+
+    Se buscan SOLO en la cola del video (último 20 % por defecto). Sin esa
+    restricción, un crédito de archivo del minuto 22 («FUNDACIÓN PABLO
+    NERUDA», que acredita una foto) cortaría el documental por la mitad.
+    Además se exige que después no vuelva a aparecer ningún rótulo de
+    identificación: si alguien sigue siendo presentado, el documental
+    continúa y eso no eran los créditos.
+    """
+    if duracion_s <= 0:
+        return None
+    umbral = duracion_s * (1 - cola)
+    candidatos = sorted((r for r in rotulos if r.inicio_s >= umbral), key=lambda r: r.inicio_s)
+    for i, rotulo in enumerate(candidatos):
+        es_credito = any(_es_credito(linea) for linea in rotulo.lineas) or any(
+            len(linea) > MAX_LARGO_LINEA for linea in rotulo.lineas
+        )
+        if not es_credito:
+            continue
+        if any(interpretar_rotulo(posterior) for posterior in candidatos[i + 1 :]):
+            continue  # el documental sigue: no eran los créditos
+        return rotulo.inicio_s
+    return None
+
+
 def menciones_verbales(segmentos: list[dict]) -> list[tuple[float, str]]:
     """(instante, nombre) dicho en voz alta con una fórmula de presentación."""
     encontradas: list[tuple[float, str]] = []
