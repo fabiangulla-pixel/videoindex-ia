@@ -57,11 +57,43 @@ def _preparar() -> str:
         pytesseract.pytesseract.tesseract_cmd = encontrado
 
     tessdata = paths.MODELOS_DIR / "tessdata"
+    if not (tessdata / "spa.traineddata").exists():
+        _descargar_modelo_espanol(tessdata)
     if (tessdata / "spa.traineddata").exists():
         os.environ["TESSDATA_PREFIX"] = str(tessdata)
         return "spa"
     log.warning("Sin spa.traineddata: el OCR usará inglés y fallará en tildes y ñ")
     return "eng"
+
+
+def _descargar_modelo_espanol(destino: Path) -> None:
+    """Baja el modelo de español la primera vez que hace falta.
+
+    Sin esto la app se degradaba EN SILENCIO: el modelo se instalaba a mano
+    en el equipo de desarrollo, la carpeta portable no lo llevaba (el
+    despliegue excluye `data/` para no pisar la biblioteca del usuario) y en
+    otro PC el OCR caía a inglés, leyendo los rótulos sin tildes ni eñes con
+    un aviso que solo aparece en el log. Un fallo así no se nota hasta que
+    los nombres salen mal en el documento entregado.
+
+    No se instala en "C:\\Program Files\\Tesseract-OCR\\tessdata" a propósito:
+    escribir ahí exige permisos de administrador.
+    """
+    import urllib.request
+
+    url = "https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata"
+    destino.mkdir(parents=True, exist_ok=True)
+    parcial = destino / "spa.traineddata.parcial"
+    try:
+        log.info("Descargando el modelo de OCR en español (~18 MB, solo la primera vez)…")
+        urllib.request.urlretrieve(url, parcial)
+        # Renombrado al final: si la descarga se corta a medias no queda un
+        # archivo truncado que Tesseract intente cargar en el próximo arranque.
+        parcial.replace(destino / "spa.traineddata")
+        log.info("Modelo de OCR en español listo en %s", destino)
+    except Exception:
+        log.exception("No se pudo descargar el modelo de OCR en español")
+        parcial.unlink(missing_ok=True)
 
 
 @dataclass
