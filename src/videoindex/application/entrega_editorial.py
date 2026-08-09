@@ -33,6 +33,7 @@ from videoindex.application.identificacion_service import CitaEnPantalla, Identi
 from videoindex.application.transcript_export_service import ADVERTENCIA, marca_tiempo
 from videoindex.domain.alucinaciones import es_alucinacion_probable
 from videoindex.domain.diarization import Intervencion, agrupar_intervenciones
+from videoindex.domain.glosario import corregir
 from videoindex.domain.limpieza import limpiar_para_lectura
 from videoindex.domain.models import TranscriptSegment
 
@@ -194,7 +195,21 @@ def _nuevo_docx(contexto: Contexto, subtitulo: str, identidades: list[Identidad]
     return doc
 
 
-def _escribir_cuerpo(doc, intervenciones, identidades, citas, limpiar: bool) -> None:
+def texto_de_lectura(texto: str, glosario: Sequence[str] | None) -> tuple[str, list]:
+    """Versión legible con la ortografía de los nombres corregida.
+
+    El glosario solo se aplica a la versión LIMPIA. La literal es el registro
+    auditable de lo que produjo la máquina: si se corrigiera también ahí, no
+    quedaría contra qué cotejar.
+    """
+    legible = limpiar_para_lectura(texto)
+    if not glosario:
+        return legible, []
+    resultado = corregir(legible, list(glosario))
+    return resultado.texto, resultado.sugerencias
+
+
+def _escribir_cuerpo(doc, intervenciones, identidades, citas, limpiar: bool, glosario=None) -> None:
     from docx.shared import Pt, RGBColor
 
     doc.add_heading("Transcripción", level=1)
@@ -217,7 +232,7 @@ def _escribir_cuerpo(doc, intervenciones, identidades, citas, limpiar: bool) -> 
             )
             detalle.runs[0].italic = True
 
-        texto = limpiar_para_lectura(intervencion.texto) if limpiar else intervencion.texto
+        texto = texto_de_lectura(intervencion.texto, glosario)[0] if limpiar else intervencion.texto
         parrafo = doc.add_paragraph()
         sello = parrafo.add_run(f"[{marca_tiempo(intervencion.start_time)}] ")
         sello.font.size = Pt(8)
@@ -242,6 +257,7 @@ def escribir_docx(
     identidades: list[Identidad],
     citas: Sequence[CitaEnPantalla],
     limpiar: bool,
+    glosario: Sequence[str] | None = None,
 ) -> Path:
     subtitulo = (
         "Transcripción editorial (versión de lectura)"
@@ -259,6 +275,7 @@ def escribir_txt(
     contexto: Contexto,
     intervenciones: list[Intervencion],
     identidades: list[Identidad],
+    glosario: Sequence[str] | None = None,
 ) -> Path:
     indice = {i.speaker_label: i for i in identidades}
     ya: set[str] = set()
@@ -270,7 +287,7 @@ def escribir_txt(
         lineas.append(
             f"[{marca_tiempo(intervencion.start_time)}] {_etiqueta(intervencion, indice, ya)}"
         )
-        lineas += [limpiar_para_lectura(intervencion.texto), ""]
+        lineas += [texto_de_lectura(intervencion.texto, glosario)[0], ""]
     destino.write_text("\n".join(lineas), encoding="utf-8")
     return destino
 
@@ -389,6 +406,7 @@ def escribir_incertidumbres(
     citas: Sequence[CitaEnPantalla],
     segmentos: list[TranscriptSegment],
     descartadas: Sequence[Intervencion] = (),
+    sugerencias_glosario: Sequence = (),
 ) -> tuple[Path, int]:
     """Solo lo que necesita decisión humana. Devuelve también cuántos asuntos
     hay: un documento de incertidumbres que nadie cuenta no sirve de nada."""
@@ -465,6 +483,21 @@ def escribir_incertidumbres(
             lineas.append(
                 f"- **{marca_tiempo(intervencion.start_time)}**: «{intervencion.texto[:160]}»"
             )
+        lineas.append("")
+
+    if sugerencias_glosario:
+        vistas = {(s.original, s.corregido) for s in sugerencias_glosario}
+        lineas += [
+            "## Nombres que quizá haya que corregir",
+            "",
+            "Se parecen a un nombre que aparece escrito en los rótulos del video, "
+            "pero no lo bastante como para cambiarlos sin mirar: **no se han "
+            "aplicado**. Compruébalos y corrígelos a mano si procede.",
+            "",
+        ]
+        for original, corregido in sorted(vistas):
+            asuntos += 1
+            lineas.append(f"- «{original}» → ¿«{corregido}»?")
         lineas.append("")
 
     peores = sorted(
@@ -567,6 +600,7 @@ def generar_paquete(
     citas: Sequence[CitaEnPantalla],
     n_rotulos: int = 0,
     fin_contenido_s: float | None = None,
+    glosario: Sequence[str] | None = None,
 ) -> dict[str, Path]:
     """Escribe los ocho documentos y devuelve sus rutas.
 
@@ -588,11 +622,30 @@ def generar_paquete(
         carpeta / "transcripcion_literal.docx", contexto, intervenciones, identidades, citas, False
     )
     salidas["limpia"] = escribir_docx(
-        carpeta / "transcripcion_limpia.docx", contexto, intervenciones, identidades, citas, True
+        carpeta / "transcripcion_limpia.docx",
+        contexto,
+        intervenciones,
+        identidades,
+        citas,
+        True,
+        glosario,
     )
     salidas["txt"] = escribir_txt(
-        carpeta / "transcripcion_completa.txt", contexto, intervenciones, identidades
+        carpeta / "transcripcion_completa.txt", contexto, intervenciones, identidades, glosario
     )
+
+    # Lo que el glosario corrigió y lo que solo sugiere, para el informe.
+    aplicadas, sugeridas = [], []
+    if glosario:
+        for intervencion in intervenciones:
+            resultado = corregir(limpiar_para_lectura(intervencion.texto), list(glosario))
+            aplicadas += resultado.cambios
+            sugeridas += resultado.sugerencias
+        if aplicadas:
+            contexto.notas.append(
+                f"{len(aplicadas)} nombre(s) con la ortografía corregida contra el "
+                "glosario sacado de los rótulos del video"
+            )
     salidas["srt"] = escribir_srt(carpeta / "subtitulos.srt", intervenciones, identidades)
     salidas["participantes"] = escribir_participantes(
         carpeta / "participantes_identificados.xlsx", identidades
@@ -605,7 +658,7 @@ def generar_paquete(
             "modelo; se listan en incertidumbres.md"
         )
     salidas["incertidumbres"], asuntos = escribir_incertidumbres(
-        carpeta / "incertidumbres.md", identidades, citas, segmentos, descartadas
+        carpeta / "incertidumbres.md", identidades, citas, segmentos, descartadas, sugeridas
     )
     contexto.notas.append(f"{asuntos} asuntos consignados en incertidumbres.md")
     salidas["proceso"] = escribir_proceso_tecnico(

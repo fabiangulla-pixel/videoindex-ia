@@ -289,6 +289,7 @@ class PaqueteEditorialWorker(QThread):
                 identificar,
                 interpretar_cita,
             )
+            from videoindex.domain.glosario import construir_glosario
             from videoindex.domain.models import SpeakerTurn
             from videoindex.infrastructure.db.connection import conectar
             from videoindex.infrastructure.db.repositories import (
@@ -321,6 +322,12 @@ class PaqueteEditorialWorker(QThread):
                     ident.evidencias.append("Nombre confirmado a mano por el usuario")
 
             citas = [c for r in self.rotulos if (c := interpretar_cita(r)) is not None]
+            # Glosario del propio video: los rótulos traen los nombres con su
+            # ortografía correcta, porque están escritos en pantalla.
+            glosario = construir_glosario(
+                [i.nombre for i in identidades if i.nombre],
+                [c.titulo for c in citas] + [c.autor for c in citas if c.autor],
+            )
             fin = detectar_inicio_creditos(self.rotulos, video.duration_seconds or 0.0)
 
             contexto = Contexto(
@@ -343,6 +350,7 @@ class PaqueteEditorialWorker(QThread):
                     citas,
                     len(self.rotulos),
                     fin_contenido_s=fin,
+                    glosario=glosario,
                 )
             )
         except Exception as exc:

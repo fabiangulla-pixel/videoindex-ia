@@ -81,6 +81,7 @@ def main() -> int:
         interpretar_cita,
     )
     from videoindex.domain.diarization import asignar_hablantes
+    from videoindex.domain.glosario import construir_glosario
     from videoindex.infrastructure.media.probe import duracion_segundos
 
     segmentos, turnos, rotulos, crudos = cargar()
@@ -108,8 +109,19 @@ def main() -> int:
         ],
     )
 
+    glosario = construir_glosario(
+        [i.nombre for i in identidades if i.nombre],
+        [c.titulo for c in citas] + [c.autor for c in citas if c.autor],
+    )
     salidas = generar_paquete(
-        RESULTADO, contexto, segmentos, identidades, citas, len(rotulos), fin_contenido
+        RESULTADO,
+        contexto,
+        segmentos,
+        identidades,
+        citas,
+        len(rotulos),
+        fin_contenido,
+        glosario,
     )
 
     print(f"\nDuración procesada: {contexto.duracion_s / 60:.1f} min")
