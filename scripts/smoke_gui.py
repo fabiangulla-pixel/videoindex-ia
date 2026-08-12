@@ -24,6 +24,9 @@ app = QApplication(sys.argv)
 ventana = MainWindow()
 ventana.agregar_pestana_rag(AskView(abrir_video=ventana.player.abrir_en))
 
+# La consola de Windows es cp1252 y los nombres de las pestañas llevan
+# emojis: sin esto, imprimirlos revienta el smoke con UnicodeEncodeError.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 nombres = [ventana.tabs.tabText(i) for i in range(ventana.tabs.count())]
 print("Pestañas:", nombres, flush=True)
 ok = ventana.tabs.count() == 3

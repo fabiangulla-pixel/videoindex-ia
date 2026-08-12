@@ -96,6 +96,29 @@ class LibraryView(QWidget):
         )
         self.log.setFixedHeight(120)
 
+        # Segunda fila: lo que se hace SOBRE el video seleccionado.
+        #
+        # Estas tres acciones existían solo en el menú contextual y por eso el
+        # usuario abrió la app y no vio nada nuevo: son justo las funciones
+        # principales, y estaban escondidas detrás de un clic derecho que
+        # nadie tiene por qué adivinar. Siguen en el menú contextual, pero
+        # ahora también se ven.
+        self.boton_transcripcion = QPushButton("🗣 Transcripción y hablantes…")
+        self.boton_transcripcion.setToolTip(
+            "Lee la transcripción por intervenciones, ponle nombre a cada voz "
+            "y expórtala a Word, Markdown o subtítulos"
+        )
+        self.boton_identificar = QPushButton("🎬 Identificar hablantes…")
+        self.boton_identificar.setToolTip(
+            "Lee los rótulos sobreimpresos del video y propone el nombre real de cada voz"
+        )
+        self.boton_paquete = QPushButton("📚 Paquete editorial…")
+        self.boton_paquete.setToolTip(
+            "Los ocho documentos de una transcripción profesional: Word literal y "
+            "limpio, txt, subtítulos, participantes, citas, incertidumbres y proceso"
+        )
+        self.etiqueta_seleccion = QLabel("Selecciona un video de la lista")
+
         barra = QHBoxLayout()
         barra.addWidget(self.boton_agregar)
         barra.addWidget(self.boton_url)
@@ -104,12 +127,28 @@ class LibraryView(QWidget):
         barra.addWidget(self.boton_exportar_okf)
         barra.addWidget(self.etiqueta_estado, stretch=1)
 
+        barra_video = QHBoxLayout()
+        barra_video.addWidget(self.boton_transcripcion)
+        barra_video.addWidget(self.boton_identificar)
+        barra_video.addWidget(self.boton_paquete)
+        barra_video.addWidget(self.etiqueta_seleccion, stretch=1)
+
         layout = QVBoxLayout(self)
         layout.addLayout(barra)
+        layout.addLayout(barra_video)
         layout.addWidget(self.progreso)
         layout.addWidget(self.tabla, stretch=1)
         layout.addWidget(QLabel("Registro de actividad:"))
         layout.addWidget(self.log)
+
+        self.tabla.itemSelectionChanged.connect(self._actualizar_acciones_video)
+        self.boton_transcripcion.clicked.connect(
+            lambda: self._con_seleccion(self._abrir_transcripcion, con_ruta=True)
+        )
+        self.boton_identificar.clicked.connect(
+            lambda: self._con_seleccion(self._identificar_hablantes, con_ruta=True)
+        )
+        self.boton_paquete.clicked.connect(lambda: self._con_seleccion(self._generar_paquete))
 
         self.boton_agregar.clicked.connect(self._agregar_carpeta)
         self.boton_url.clicked.connect(self._agregar_desde_url)
@@ -177,6 +216,42 @@ class LibraryView(QWidget):
                 if col == 0:
                     item.setData(Qt.ItemDataRole.UserRole, (v.video_id, v.path))
                 self.tabla.setItem(fila, col, item)
+        self._actualizar_acciones_video()
+
+    def _fila_seleccionada(self) -> tuple[str, str, str] | None:
+        """(video_id, título, ruta) del video seleccionado, si está completado."""
+        filas = {i.row() for i in self.tabla.selectedItems()}
+        if len(filas) != 1:
+            return None
+        fila = filas.pop()
+        titulo_item = self.tabla.item(fila, 0)
+        estado_item = self.tabla.item(fila, 4)
+        if titulo_item is None or estado_item is None:
+            return None
+        if estado_item.text() != _ETIQUETAS_ESTADO["completed"]:
+            return None
+        video_id, ruta = titulo_item.data(Qt.ItemDataRole.UserRole)
+        return video_id, titulo_item.text(), ruta
+
+    def _actualizar_acciones_video(self) -> None:
+        """Las tres acciones sobre un video solo tienen sentido con uno
+        seleccionado y ya procesado; el rótulo dice por qué si no."""
+        seleccion = self._fila_seleccionada()
+        for boton in (self.boton_transcripcion, self.boton_identificar, self.boton_paquete):
+            boton.setEnabled(seleccion is not None)
+        if seleccion is not None:
+            self.etiqueta_seleccion.setText(f"Video seleccionado: «{seleccion[1]}»")
+        elif self.tabla.selectedItems():
+            self.etiqueta_seleccion.setText("Ese video aún no está procesado: primero transcríbelo")
+        else:
+            self.etiqueta_seleccion.setText("Selecciona un video de la lista")
+
+    def _con_seleccion(self, accion, con_ruta: bool = False) -> None:
+        seleccion = self._fila_seleccionada()
+        if seleccion is None:
+            return
+        video_id, titulo, ruta = seleccion
+        accion(video_id, titulo, ruta) if con_ruta else accion(video_id, titulo)
 
     def _abrir_seleccionado(self, item: QTableWidgetItem) -> None:
         """Reproducir cualquier video de la biblioteca, esté o no procesado

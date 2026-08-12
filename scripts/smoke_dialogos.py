@@ -32,6 +32,10 @@ from videoindex.presentation.settings_dialog import ApiSettingsDialog  # noqa: E
 from videoindex.presentation.transcript_dialog import TranscriptDialog  # noqa: E402
 from videoindex.presentation.url_dialog import UrlDialog  # noqa: E402
 
+# La consola de Windows es cp1252 y los rotulos de la app llevan emojis:
+# sin esto, imprimir un resultado revienta el smoke con UnicodeEncodeError.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 fallos: list[str] = []
 
 
@@ -128,6 +132,33 @@ config._n_hablantes.setValue(2)
 comprobar(not config._umbral.isEnabled(), "con nº fijo de hablantes el umbral se bloquea")
 config._diarizacion.setChecked(False)
 comprobar(not config._n_hablantes.isEnabled(), "sin diarización se bloquean sus ajustes")
+
+print("LibraryView (botones visibles):", flush=True)
+from videoindex.presentation.library_view import LibraryView  # noqa: E402
+
+biblioteca = LibraryView()
+etiquetas = [
+    biblioteca.boton_agregar.text(),
+    biblioteca.boton_url.text(),
+    biblioteca.boton_transcripcion.text(),
+    biblioteca.boton_identificar.text(),
+    biblioteca.boton_paquete.text(),
+]
+comprobar("URL" in etiquetas[1], "el boton de descargar por URL esta a la vista")
+comprobar(
+    any("Transcripción" in e for e in etiquetas)
+    and any("Identificar" in e for e in etiquetas)
+    and any("Paquete" in e for e in etiquetas),
+    f"las tres acciones principales tienen boton propio (vio {etiquetas[2:]})",
+)
+comprobar(
+    not biblioteca.boton_identificar.isEnabled(),
+    "sin video seleccionado, las acciones sobre un video estan deshabilitadas",
+)
+comprobar(
+    "Selecciona un video" in biblioteca.etiqueta_seleccion.text(),
+    "y el rotulo explica por que",
+)
 
 print("IdentidadesDialog:", flush=True)
 from videoindex.application.identificacion_service import ALTO, BAJO, Identidad  # noqa: E402
