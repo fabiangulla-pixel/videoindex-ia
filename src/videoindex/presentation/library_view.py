@@ -58,6 +58,10 @@ class LibraryView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.boton_agregar = QPushButton("📂 Agregar carpeta…")
+        self.boton_agregar.setToolTip(
+            "Acepta tanto video (mp4, mkv, avi, mov…) como archivos de solo audio "
+            "(mp3, wav, m4a, flac, ogg…). Sirve con un único archivo en la carpeta."
+        )
         self.boton_url = QPushButton("🌐 Añadir desde URL…")
         self.boton_url.setToolTip(
             "Baja la pista de audio de un video de YouTube (u otro sitio) y lo "
