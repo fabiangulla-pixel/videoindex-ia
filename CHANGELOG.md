@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-08-21 — Aclarar que la ingesta acepta audio, no solo video
+
+El usuario preguntó si podía subir un archivo solo de audio. El pipeline ya
+lo aceptaba (`EXTENSIONES_VIDEO` en `infrastructure/media/probe.py` incluye
+mp3, wav, m4a, flac, ogg, opus, aac, wma junto con los formatos de video),
+pero era el único botón principal de la Biblioteca sin tooltip que lo
+dijera — a diferencia de "Añadir desde URL…", que sí explica qué hace.
+
+- **`presentation/library_view.py`**: tooltip en "📂 Agregar carpeta…"
+  aclarando que acepta video y audio puro, y que sirve con un solo archivo
+  en la carpeta.
+- 256 tests en verde, `.exe` recompilado (86 MB) y pusheado
+  (`bdc8414`).
+
+## 2026-08-11 — Sacar a la vista las tres acciones principales
+
+El usuario abrió la app y no vio nada de lo implementado en la sesión
+anterior: identificar hablantes por rótulos, transcripción con nombres y
+paquete editorial vivían solo en el menú de clic derecho. Segunda fila de
+botones en Biblioteca para lo que se hace sobre el video seleccionado,
+habilitados solo con un video procesado seleccionado. Descubierto
+capturando la ventana real del `.exe` con `PrintWindow(hwnd)`
+(`scripts/capturar_ventana.py`) en vez de deducirlo del log de compilación.
+256 tests.
+
 ## 2026-08-07 — Quién dijo qué (diarización) e ingesta desde YouTube
 
 Dos features pedidas juntas, con un destino concreto: convertir una charla
